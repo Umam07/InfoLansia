@@ -1,6 +1,6 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
 import 'layanan_screen.dart';
 import 'skrining_screen.dart';
@@ -18,11 +18,78 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _currentIndex = 0;
   late final PageController _pageController;
+  int _totalPatientsCount = 0;
+  int _screenedPatientsCount = 0;
+  int _screenedTodayCount = 0;
+  int _targetTodayCount = 0;
+  bool _isLoadingStats = true;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
+    _fetchStats();
+  }
+
+  Future<void> _fetchStats() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingStats = true;
+    });
+    try {
+      final patientsResponse = await Supabase.instance.client
+          .from('patients')
+          .select('id');
+      
+      final totalPatients = patientsResponse.length;
+
+      final now = DateTime.now();
+      final startOfMonth = DateTime(now.year, now.month, 1).toIso8601String().split('T').first;
+      final todayStr = now.toIso8601String().split('T').first;
+      
+      final screeningsResponse = await Supabase.instance.client
+          .from('screenings')
+          .select('patient_id, date')
+          .gte('date', startOfMonth);
+
+      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningsResponse);
+
+      final uniqueScreenedIds = screenings
+          .map((s) => s['patient_id'] as String)
+          .toSet();
+
+      final screenedCount = uniqueScreenedIds.length;
+
+      // Calculate screened today (unique patients screened today)
+      final uniqueScreenedTodayIds = screenings
+          .where((s) => (s['date'] as String).startsWith(todayStr))
+          .map((s) => s['patient_id'] as String)
+          .toSet();
+
+      final screenedTodayCount = uniqueScreenedTodayIds.length;
+
+      // Remaining is patients not screened this month
+      final remaining = (totalPatients - screenedCount).clamp(0, totalPatients);
+
+      // Target today = screened today + remaining patients
+      final targetToday = screenedTodayCount + remaining;
+
+      if (mounted) {
+        setState(() {
+          _totalPatientsCount = totalPatients;
+          _screenedPatientsCount = screenedCount;
+          _screenedTodayCount = screenedTodayCount;
+          _targetTodayCount = targetToday;
+          _isLoadingStats = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingStats = false;
+        });
+      }
+    }
   }
 
   @override
@@ -45,6 +112,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 setState(() {
                   _currentIndex = index;
                 });
+                if (index == 0) {
+                  _fetchStats();
+                }
               },
               physics: const BouncingScrollPhysics(),
               children: [
@@ -74,25 +144,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         _buildHeader(),
         Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.only(
-              left: 20.0,
-              right: 20.0,
-              top: 24.0,
-              bottom: 120.0, // Space for BottomNavBar
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildWelcomeSection(),
-                const SizedBox(height: 32.0),
-                _buildRingkasanLayanan(),
-                const SizedBox(height: 32.0),
-                _buildAksesCepat(),
-                const SizedBox(height: 32.0),
-                _buildFeaturedCard(),
-              ],
+          child: RefreshIndicator(
+            onRefresh: _fetchStats,
+            color: AppColors.primary,
+            backgroundColor: AppColors.surfaceContainerLowest,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
+              ),
+              padding: const EdgeInsets.only(
+                left: 20.0,
+                right: 20.0,
+                top: 24.0,
+                bottom: 120.0, // Space for BottomNavBar
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildWelcomeSection(),
+                  const SizedBox(height: 32.0),
+                  _buildRingkasanLayanan(),
+                  const SizedBox(height: 32.0),
+                  _buildAksesCepat(),
+                  const SizedBox(height: 32.0),
+                  _buildFeaturedCard(),
+                ],
+              ),
             ),
           ),
         ),
@@ -121,23 +198,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: SafeArea(
         bottom: false,
-        child: Container(
-          height: 64.0,
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            children: [
-              // Title
-              Text(
-                'Posyandu Sakura',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.primary,
-                  letterSpacing: -0.5,
-                ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 64.0,
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: Row(
+                children: [
+                  // Title
+                  Text(
+                    'Posyandu Sakura',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primary,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            if (_isLoadingStats)
+              const LinearProgressIndicator(
+                minHeight: 2.0,
+                color: AppColors.primary,
+                backgroundColor: Colors.transparent,
+              )
+            else
+              const SizedBox(height: 2.0),
+          ],
         ),
       ),
     );
@@ -145,11 +235,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Welcome Section
   Widget _buildWelcomeSection() {
+    final user = Supabase.instance.client.auth.currentUser;
+    final displayName = user?.userMetadata?['full_name'] ?? 
+                        user?.userMetadata?['name'] ?? 
+                        user?.email?.split('@').first ?? 
+                        'Bidan SIU';
+
+    final hour = DateTime.now().hour;
+    String timeGreeting;
+    if (hour < 11) {
+      timeGreeting = 'Selamat pagi';
+    } else if (hour < 15) {
+      timeGreeting = 'Selamat siang';
+    } else if (hour < 18) {
+      timeGreeting = 'Selamat sore';
+    } else {
+      timeGreeting = 'Selamat malam';
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Halo, Bidan SIU',
+          'Halo, $displayName',
           style: GoogleFonts.plusJakartaSans(
             fontSize: 20,
             fontWeight: FontWeight.w600,
@@ -159,7 +267,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 4.0),
         Text(
-          'Selamat pagi, mari bantu lansia tetap sehat hari ini.',
+          '$timeGreeting, mari bantu lansia tetap sehat hari ini.',
           style: GoogleFonts.plusJakartaSans(
             fontSize: 14,
             fontWeight: FontWeight.normal,
@@ -206,6 +314,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         LayoutBuilder(
           builder: (context, constraints) {
             final cardWidth = (constraints.maxWidth - 16.0) / 2;
+            final remaining = (_totalPatientsCount - _screenedPatientsCount).clamp(0, _totalPatientsCount);
+            final percentage = _totalPatientsCount > 0 
+                ? ((_screenedPatientsCount / _totalPatientsCount) * 100).round()
+                : 0;
+
             return Column(
               children: [
                 // Top Row: 2 Squares
@@ -262,7 +375,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                               const SizedBox(height: 4.0),
                               Text(
-                                '124',
+                                '$_totalPatientsCount',
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 28,
                                   fontWeight: FontWeight.w800,
@@ -322,7 +435,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                               const SizedBox(height: 4.0),
                               Text(
-                                '85',
+                                '$_screenedPatientsCount',
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 28,
                                   fontWeight: FontWeight.w800,
@@ -394,7 +507,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                   const SizedBox(height: 2.0),
                                   Text(
-                                    '39 Lansia',
+                                    '$remaining Warga',
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 20,
                                       fontWeight: FontWeight.w700,
@@ -423,7 +536,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                '68%',
+                                '$percentage%',
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 20,
                                   fontWeight: FontWeight.bold,
@@ -513,7 +626,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 iconColor: AppColors.tertiary,
                 title: 'Riwayat',
                 subtitle: 'Cek data sebelumnya',
-                onTap: () {},
+                onTap: () {
+                  _pageController.animateToPage(
+                    3,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                  AppToast.show(
+                    context: context,
+                    message: 'Pilih pasien untuk melihat riwayat pemeriksaan',
+                    type: AppToastType.info,
+                  );
+                },
               ),
               _buildDivider(indent: 76.0),
               _buildAppleListItem(
@@ -666,7 +790,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                         const SizedBox(height: 2.0),
                         Text(
-                          'Selesaikan skrining di RW 06',
+                          _targetTodayCount == 0
+                              ? 'Semua warga selesai diskrining'
+                              : 'Selesaikan skrining $_targetTodayCount warga hari ini',
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 12,
                             color: Colors.white.withValues(alpha: 0.8),
@@ -706,7 +832,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                     Text(
-                      '12/20 Lansia',
+                      '$_screenedTodayCount/$_targetTodayCount Warga',
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 12,
                         color: Colors.white,
@@ -727,7 +853,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   child: FractionallySizedBox(
                     alignment: Alignment.centerLeft,
-                    widthFactor: 0.6, // 12/20 -> 60%
+                    widthFactor: _targetTodayCount > 0 
+                        ? (_screenedTodayCount / _targetTodayCount).clamp(0.0, 1.0) 
+                        : 0.0,
                     child: Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -753,25 +881,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Premium Bottom Navigation Bar (Glassmorphic style)
   Widget _buildBottomNavBar() {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20.0, sigmaY: 20.0),
-        child: Container(
-          height: 80.0 + MediaQuery.of(context).padding.bottom,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.85),
-            border: Border(
-              top: BorderSide(
-                color: AppColors.borderSubtle.withValues(alpha: 0.4),
-                width: 1.0,
-              ),
-            ),
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    return Container(
+      height: 80.0 + bottomPadding,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
           ),
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).padding.bottom,
-            left: 16.0,
-            right: 16.0,
+        ],
+        border: Border(
+          top: BorderSide(
+            color: AppColors.borderSubtle.withValues(alpha: 0.4),
+            width: 1.0,
           ),
+        ),
+      ),
+      padding: EdgeInsets.only(
+        bottom: bottomPadding,
+        left: 16.0,
+        right: 16.0,
+      ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
@@ -801,8 +934,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 label: 'Profil',
               ),
             ],
-          ),
-        ),
       ),
     );
   }

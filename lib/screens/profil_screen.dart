@@ -1,13 +1,124 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
 import '../widgets/app_toast.dart';
+import 'login_screen.dart';
 
-class ProfilScreen extends StatelessWidget {
+class ProfilScreen extends StatefulWidget {
   const ProfilScreen({
     super.key,
   });
+
+  @override
+  State<ProfilScreen> createState() => _ProfilScreenState();
+}
+
+class _ProfilScreenState extends State<ProfilScreen> {
+  User? _user;
+  String _name = '';
+  String _gender = '';
+  String _birthDate = ''; // YYYY-MM-DD format
+  String _address = '';
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData();
+  }
+
+  void _loadUserData() {
+    _user = Supabase.instance.client.auth.currentUser;
+    if (_user != null) {
+      final meta = _user!.userMetadata ?? {};
+      _name = meta['full_name'] ?? meta['name'] ?? '';
+      _gender = meta['gender'] ?? '';
+      _birthDate = meta['birth_date'] ?? '';
+      _address = meta['address'] ?? '';
+    }
+  }
+
+  // Indonesian Date Formatter for text display (e.g. "1957-08-24" -> "24 Agustus 1957")
+  String _formatBirthDate(String isoDateStr) {
+    if (isoDateStr.isEmpty) return '-';
+    try {
+      final parts = isoDateStr.split('-');
+      if (parts.length == 3) {
+        final year = parts[0];
+        final monthNum = int.tryParse(parts[1]) ?? 1;
+        final day = int.parse(parts[2]).toString().padLeft(2, '0');
+
+        const months = [
+          'Januari',
+          'Februari',
+          'Maret',
+          'April',
+          'Mei',
+          'Juni',
+          'Juli',
+          'Agustus',
+          'September',
+          'Oktober',
+          'November',
+          'Desember'
+        ];
+        final monthName = months[monthNum - 1];
+        return '$day $monthName $year';
+      }
+    } catch (_) {}
+    return isoDateStr;
+  }
+
+  // Format date to dd/mm/yyyy for text field
+  String _formatDisplayDate(DateTime date) {
+    String day = date.day.toString().padLeft(2, '0');
+    String month = date.month.toString().padLeft(2, '0');
+    return '$day/$month/${date.year}';
+  }
+
+  InputDecoration _buildInputDecoration({required String hint}) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: GoogleFonts.plusJakartaSans(
+        color: AppColors.outline.withValues(alpha: 0.6),
+        fontSize: 14.0,
+      ),
+      filled: true,
+      fillColor: AppColors.surface,
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12.0),
+        borderSide: const BorderSide(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12.0),
+        borderSide: const BorderSide(
+          color: AppColors.primary,
+          width: 1.5,
+        ),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12.0),
+        borderSide: const BorderSide(
+          color: AppColors.error,
+          width: 1.0,
+        ),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12.0),
+        borderSide: const BorderSide(
+          color: AppColors.error,
+          width: 1.5,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -92,8 +203,53 @@ class ProfilScreen extends StatelessWidget {
     );
   }
 
+  Widget _buildAvatarWidget() {
+    final avatarUrl = _user?.userMetadata?['avatar_url'] ??
+        _user?.userMetadata?['picture'] as String?;
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      return Image.network(
+        avatarUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildInitialsOrIcon(),
+      );
+    }
+    return _buildInitialsOrIcon();
+  }
+
+  Widget _buildInitialsOrIcon() {
+    if (_name.isNotEmpty) {
+      final initials = _name
+          .trim()
+          .split(' ')
+          .map((e) => e.isEmpty ? '' : e[0])
+          .take(2)
+          .join('')
+          .toUpperCase();
+      if (initials.isNotEmpty) {
+        return Container(
+          color: AppColors.secondaryContainer,
+          alignment: Alignment.center,
+          child: Text(
+            initials,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primary,
+            ),
+          ),
+        );
+      }
+    }
+    return const Icon(
+      Icons.person_rounded,
+      color: AppColors.primary,
+      size: 48.0,
+    );
+  }
+
   // Profile Header (Avatar, Name, Age)
   Widget _buildProfileHeader(BuildContext context) {
+    final email = _user?.email ?? 'petugas@posyandusakura.id';
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 24.0),
@@ -122,15 +278,7 @@ class ProfilScreen extends StatelessWidget {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(999.0),
-                    child: Image.network(
-                      'https://lh3.googleusercontent.com/aida-public/AB6AXuA_1YTqHXWf5mqy3yvQIxg9TQR4dt-DsZtg1Tqfbo64MEQpkLHxor3Xl3WofHQIC901BmCnOTfgFpHgC4ewnSLrvVLsgLy6BTft4_QHMyb3HpFXOGulajI2jCIetLihqHcBP38ajtlNPXaniIxFn3SIesnSOEwtBCc4-WQ1FH4bliYoJ_-bwFw0IybNJCtvvBjkwxbe4L4u6I32a7HIApqA8pxg1tu_zyrj0IpE6MhLoC_YgJ1c-fSbOfiBlNTecRrhOBalsCzvEUQP',
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => const Icon(
-                        Icons.person_rounded,
-                        color: AppColors.primary,
-                        size: 48.0,
-                      ),
-                    ),
+                    child: _buildAvatarWidget(),
                   ),
                 ),
                 // Edit badge
@@ -163,9 +311,9 @@ class ProfilScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16.0),
-            // Siti Aminah
+            // User Name
             Text(
-              'Siti Aminah',
+              _name.isNotEmpty ? _name : 'Nama Pengguna',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 20.0,
                 fontWeight: FontWeight.w600,
@@ -174,9 +322,9 @@ class ProfilScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4.0),
-            // Age
+            // User Email
             Text(
-              'Umur: 68 Tahun',
+              email,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 14.0,
                 color: AppColors.textSecondary,
@@ -361,8 +509,21 @@ class ProfilScreen extends StatelessWidget {
   // Logout Button
   Widget _buildLogoutButton(BuildContext context) {
     return _SpringButton(
-      onTap: () {
-        _showToast(context, 'Melakukan Keluar...');
+      onTap: () async {
+        try {
+          await Supabase.instance.client.auth.signOut();
+          if (context.mounted) {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const LoginScreen()),
+              (route) => false,
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            _showToast(context, 'Gagal keluar: $e');
+          }
+        }
       },
       child: Container(
         width: double.infinity,
@@ -379,9 +540,9 @@ class ProfilScreen extends StatelessWidget {
               color: Color.fromRGBO(0, 0, 0, 0.04),
               blurRadius: 24,
               offset: Offset(0, 4),
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -411,7 +572,7 @@ class ProfilScreen extends StatelessWidget {
       child: Opacity(
         opacity: 0.6,
         child: Text(
-          'Versi Aplikasi 2.4.0 (Cloud)',
+          'Versi Aplikasi 1.1.0',
           style: GoogleFonts.plusJakartaSans(
             fontSize: 12.0,
             color: AppColors.textSecondary,
@@ -461,59 +622,511 @@ class ProfilScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
-                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                     children: [
-                       Text(
-                         'Informasi Pribadi',
-                         style: GoogleFonts.plusJakartaSans(
-                           fontSize: 18,
-                           fontWeight: FontWeight.bold,
-                           color: AppColors.primary,
-                         ),
-                       ),
-                       IconButton(
-                         icon: const Icon(Icons.close_rounded),
-                         onPressed: () => Navigator.pop(context),
-                       ),
-                     ],
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Informasi Pribadi',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16.0),
-                  _buildInfoRow('NIK', '3201062408570001'),
+                  _buildInfoRow('Nama Lengkap', _name.isNotEmpty ? _name : '-'),
                   _buildInfoDivider(),
-                  _buildInfoRow('Nama Lengkap', 'Siti Aminah'),
+                  _buildInfoRow(
+                      'Jenis Kelamin', _gender.isNotEmpty ? _gender : '-'),
                   _buildInfoDivider(),
-                  _buildInfoRow('Jenis Kelamin', 'Perempuan'),
+                  _buildInfoRow(
+                      'Tanggal Lahir',
+                      _birthDate.isNotEmpty
+                          ? _formatBirthDate(_birthDate)
+                          : '-'),
                   _buildInfoDivider(),
-                  _buildInfoRow('Umur', '68 Tahun'),
-                  _buildInfoDivider(),
-                  _buildInfoRow('Tanggal Lahir', '24 Agustus 1957'),
-                  _buildInfoDivider(),
-                  _buildInfoRow('No. Telepon', '0812-8877-6655'),
-                  _buildInfoDivider(),
-                  _buildInfoRow('Alamat', 'RT 03 / RW 06, Sukamaju'),
+                  _buildInfoRow(
+                      'Alamat Lengkap', _address.isNotEmpty ? _address : '-'),
                   const SizedBox(height: 24.0),
-                  ElevatedButton(
-                     style: ElevatedButton.styleFrom(
-                       backgroundColor: AppColors.primary,
-                       foregroundColor: Colors.white,
-                       elevation: 0,
-                       shape: RoundedRectangleBorder(
-                         borderRadius: BorderRadius.circular(12.0),
-                       ),
-                       padding: const EdgeInsets.symmetric(vertical: 14.0),
-                     ),
-                     onPressed: () => Navigator.pop(context),
-                     child: Text(
-                       'Tutup',
-                       style: GoogleFonts.plusJakartaSans(
-                         fontWeight: FontWeight.bold,
-                       ),
-                     ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            side:
+                                const BorderSide(color: AppColors.borderSubtle),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12.0),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14.0),
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(
+                            'Tutup',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12.0),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12.0),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14.0),
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _showEditInformasiPribadi(context);
+                          },
+                          child: Text(
+                            'Ubah Data',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
           ),
+        );
+      },
+    );
+  }
+
+  // Beautiful Blurred Dialog for Edit Informasi Pribadi
+  void _showEditInformasiPribadi(BuildContext context) {
+    String tempName = _name;
+    String tempGender = _gender.isNotEmpty ? _gender : 'Perempuan';
+    String tempBirthDate = _birthDate;
+    String tempAddress = _address;
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController(text: tempName);
+    final dateController = TextEditingController(
+        text: tempBirthDate.isNotEmpty
+            ? _formatDisplayDate(DateTime.parse(tempBirthDate))
+            : '');
+    final addressController = TextEditingController(text: tempAddress);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateBuilder) {
+            Future<void> selectDate() async {
+              DateTime initialDate = tempBirthDate.isNotEmpty
+                  ? DateTime.tryParse(tempBirthDate) ?? DateTime(1990)
+                  : DateTime(1990);
+              final DateTime? picked = await showDatePicker(
+                context: context,
+                initialDate: initialDate,
+                firstDate: DateTime(1900),
+                lastDate: DateTime.now(),
+                builder: (context, child) {
+                  return Theme(
+                    data: Theme.of(context).copyWith(
+                      colorScheme: const ColorScheme.light(
+                        primary: AppColors.primary,
+                        onPrimary: Colors.white,
+                        onSurface: AppColors.onSurface,
+                      ),
+                      textButtonTheme: TextButtonThemeData(
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                    child: child!,
+                  );
+                },
+              );
+              if (picked != null) {
+                setStateBuilder(() {
+                  tempBirthDate = picked.toIso8601String().split('T').first;
+                  dateController.text = _formatDisplayDate(picked);
+                });
+              }
+            }
+
+            return BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+              child: Dialog(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 400),
+                  padding: const EdgeInsets.all(24.0),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(28.0),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: SingleChildScrollView(
+                    child: Form(
+                      key: formKey,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Ubah Informasi Pribadi',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded),
+                                onPressed: () {
+                                  Navigator.pop(context);
+                                  _showInformasiPribadi(context);
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16.0),
+
+                          // Nama Lengkap
+                          Text(
+                            'Nama Lengkap',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 6.0),
+                          TextFormField(
+                            controller: nameController,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.onSurface,
+                            ),
+                            decoration: _buildInputDecoration(
+                                hint: 'Masukkan nama lengkap'),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Nama lengkap wajib diisi';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16.0),
+
+                          // Jenis Kelamin
+                          Text(
+                            'Jenis Kelamin',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 6.0),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setStateBuilder(() {
+                                      tempGender = 'Perempuan';
+                                    });
+                                  },
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    height: 48,
+                                    decoration: BoxDecoration(
+                                      color: tempGender == 'Perempuan'
+                                          ? AppColors.primary
+                                              .withValues(alpha: 0.05)
+                                          : AppColors.surface,
+                                      borderRadius: BorderRadius.circular(12.0),
+                                      border: Border.all(
+                                        color: tempGender == 'Perempuan'
+                                            ? AppColors.primary
+                                            : AppColors.borderSubtle,
+                                        width: tempGender == 'Perempuan'
+                                            ? 2.0
+                                            : 1.0,
+                                      ),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      'Perempuan',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 14.0,
+                                        fontWeight: tempGender == 'Perempuan'
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: tempGender == 'Perempuan'
+                                            ? AppColors.primary
+                                            : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12.0),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setStateBuilder(() {
+                                      tempGender = 'Laki-laki';
+                                    });
+                                  },
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    height: 48,
+                                    decoration: BoxDecoration(
+                                      color: tempGender == 'Laki-laki'
+                                          ? AppColors.primary
+                                              .withValues(alpha: 0.05)
+                                          : AppColors.surface,
+                                      borderRadius: BorderRadius.circular(12.0),
+                                      border: Border.all(
+                                        color: tempGender == 'Laki-laki'
+                                            ? AppColors.primary
+                                            : AppColors.borderSubtle,
+                                        width: tempGender == 'Laki-laki'
+                                            ? 2.0
+                                            : 1.0,
+                                      ),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      'Laki-laki',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 14.0,
+                                        fontWeight: tempGender == 'Laki-laki'
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: tempGender == 'Laki-laki'
+                                            ? AppColors.primary
+                                            : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16.0),
+
+                          // Tanggal Lahir
+                          Text(
+                            'Tanggal Lahir',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 6.0),
+                          GestureDetector(
+                            onTap: selectDate,
+                            child: AbsorbPointer(
+                              child: TextFormField(
+                                controller: dateController,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.onSurface,
+                                ),
+                                decoration:
+                                    _buildInputDecoration(hint: 'dd/mm/yyyy')
+                                        .copyWith(
+                                  suffixIcon: const Icon(
+                                    Icons.calendar_today_rounded,
+                                    color: AppColors.outline,
+                                    size: 20.0,
+                                  ),
+                                ),
+                                validator: (value) {
+                                  if (dateController.text.isEmpty) {
+                                    return 'Tanggal lahir wajib diisi';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16.0),
+
+                          // Alamat Lengkap
+                          Text(
+                            'Alamat Lengkap',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 6.0),
+                          TextFormField(
+                            controller: addressController,
+                            maxLines: 3,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.onSurface,
+                            ),
+                            decoration: _buildInputDecoration(
+                                hint: 'Masukkan alamat lengkap'),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Alamat lengkap wajib diisi';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 24.0),
+
+                          // Actions
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(
+                                        color: AppColors.borderSubtle),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12.0),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 14.0),
+                                  ),
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _showInformasiPribadi(context);
+                                  },
+                                  child: Text(
+                                    'Batal',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12.0),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primary,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12.0),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 14.0),
+                                  ),
+                                  onPressed: _isSaving
+                                      ? null
+                                      : () async {
+                                          if (formKey.currentState!
+                                              .validate()) {
+                                            setStateBuilder(() {
+                                              _isSaving = true;
+                                            });
+                                            try {
+                                              await Supabase
+                                                  .instance.client.auth
+                                                  .updateUser(
+                                                UserAttributes(
+                                                  data: {
+                                                    'full_name': nameController
+                                                        .text
+                                                        .trim(),
+                                                    'gender': tempGender,
+                                                    'birth_date': tempBirthDate,
+                                                    'address': addressController
+                                                        .text
+                                                        .trim(),
+                                                  },
+                                                ),
+                                              );
+
+                                              setState(() {
+                                                _loadUserData();
+                                              });
+
+                                              if (context.mounted) {
+                                                _showToast(context,
+                                                    'Profil berhasil diperbarui');
+                                                Navigator.pop(context);
+                                                _showInformasiPribadi(context);
+                                              }
+                                            } catch (e) {
+                                              if (context.mounted) {
+                                                _showToast(context,
+                                                    'Gagal memperbarui profil: $e');
+                                              }
+                                            } finally {
+                                              setStateBuilder(() {
+                                                _isSaving = false;
+                                              });
+                                            }
+                                          }
+                                        },
+                                  child: _isSaving
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                    Colors.white),
+                                          ),
+                                        )
+                                      : Text(
+                                          'Simpan',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -796,7 +1409,7 @@ class ProfilScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 4.0),
                   Text(
-                    'Versi 2.4.0 (Cloud)',
+                    'Versi 1.1.0 (Cloud)',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
                       color: AppColors.textSecondary,
@@ -892,72 +1505,72 @@ class ProfilScreen extends StatelessWidget {
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                           color: AppColors.primary,
-                         ),
-                       ),
-                       IconButton(
-                         icon: const Icon(Icons.close_rounded),
-                         onPressed: () => Navigator.pop(context),
-                       ),
-                     ],
-                   ),
-                   const SizedBox(height: 12.0),
-                   ConstrainedBox(
-                     constraints: const BoxConstraints(maxHeight: 250),
-                     child: Scrollbar(
-                       thumbVisibility: true,
-                       child: SingleChildScrollView(
-                         physics: const BouncingScrollPhysics(),
-                         child: Padding(
-                           padding: const EdgeInsets.only(right: 12.0),
-                           child: Text(
-                             'Selamat datang di Aplikasi Posyandu Sakura.\n\n'
-                             'Kami sangat berkomitmen untuk melindungi data pribadi dan medis Anda. Kebijakan ini menjelaskan bagaimana data Anda dikelola:\n\n'
-                             '1. Pengumpulan Data\n'
-                             'Kami mengumpulkan informasi pribadi seperti Nama, NIK, Umur, Alamat, serta hasil pemeriksaan fisik bulanan Anda (Tekanan Darah, Gula Darah, Kolesterol, dll).\n\n'
-                             '2. Penggunaan Data\n'
-                             'Data medis Anda digunakan murni untuk mencatat rekam medis pelayanan Posyandu Sakura, memantau tren perkembangan kesehatan lansia secara individu, dan menyajikan laporan kesehatan kumulatif tingkat RT/RW.\n\n'
-                             '3. Keamanan Data\n'
-                             'Data dienkripsi secara aman di cloud database dan hanya dapat diakses oleh bidan atau kader posyandu yang berwenang di RW 06.\n\n'
-                             '4. Persetujuan\n'
-                             'Dengan menggunakan aplikasi ini, Anda setuju bahwa data pemeriksaan posyandu Anda direkam secara digital untuk kepentingan pemantauan medis.\n\n'
-                             'Jika Anda memiliki pertanyaan mengenai data pribadi Anda, hubungi tim bantuan posyandu kami.',
-                             style: GoogleFonts.plusJakartaSans(
-                               fontSize: 13,
-                               color: AppColors.textSecondary,
-                               height: 1.5,
-                             ),
-                           ),
-                         ),
-                       ),
-                     ),
-                   ),
-                   const SizedBox(height: 24.0),
-                   ElevatedButton(
-                     style: ElevatedButton.styleFrom(
-                       backgroundColor: AppColors.primary,
-                       foregroundColor: Colors.white,
-                       elevation: 0,
-                       shape: RoundedRectangleBorder(
-                         borderRadius: BorderRadius.circular(12.0),
-                       ),
-                       padding: const EdgeInsets.symmetric(vertical: 14.0),
-                     ),
-                     onPressed: () => Navigator.pop(context),
-                     child: Text(
-                       'Saya Mengerti',
-                       style: GoogleFonts.plusJakartaSans(
-                         fontWeight: FontWeight.bold,
-                       ),
-                     ),
-                   ),
-                 ],
-               ),
-             ),
-           ),
-         );
-       },
-     );
-   }
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12.0),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 250),
+                    child: Scrollbar(
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 12.0),
+                          child: Text(
+                            'Selamat datang di Aplikasi Posyandu Sakura.\n\n'
+                            'Kami sangat berkomitmen untuk melindungi data pribadi dan medis Anda. Kebijakan ini menjelaskan bagaimana data Anda dikelola:\n\n'
+                            '1. Pengumpulan Data\n'
+                            'Kami mengumpulkan informasi pribadi seperti Nama, Alamat, serta hasil pemeriksaan fisik bulanan Anda (Tekanan Darah, Gula Darah, Kolesterol, dll).\n\n'
+                            '2. Penggunaan Data\n'
+                            'Data medis Anda digunakan murni untuk mencatat rekam medis pelayanan Posyandu Sakura, memantau tren perkembangan kesehatan lansia secara individu, dan menyajikan laporan kesehatan kumulatif tingkat RT/RW.\n\n'
+                            '3. Keamanan Data\n'
+                            'Data dienkripsi secara aman di cloud database dan hanya dapat diakses oleh bidan atau kader posyandu yang berwenang di RW 06.\n\n'
+                            '4. Persetujuan\n'
+                            'Dengan menggunakan aplikasi ini, Anda setuju bahwa data pemeriksaan posyandu Anda direkam secara digital untuk kepentingan pemantauan medis.\n\n'
+                            'Jika Anda memiliki pertanyaan mengenai data pribadi Anda, hubungi tim bantuan posyandu kami.',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              color: AppColors.textSecondary,
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24.0),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12.0),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 14.0),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(
+                      'Saya Mengerti',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 // Custom spring button for crisp Apple/iOS click feel
@@ -974,7 +1587,8 @@ class _SpringButton extends StatefulWidget {
   State<_SpringButton> createState() => _SpringButtonState();
 }
 
-class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderStateMixin {
+class _SpringButtonState extends State<_SpringButton>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _scale;
 

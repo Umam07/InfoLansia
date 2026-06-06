@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# CodeGraph
+.codegraph/
+
+# AI tool configs
+.claude/
+.kiro/
+.gemini/
+.mcp.json
+GEMINI.md

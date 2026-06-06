@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
-import 'detail_pasien_screen.dart';
-import 'tambah_lansia_screen.dart';
-import 'edit_lansia_screen.dart';
+import 'pasien/detail_pasien_screen.dart';
+import 'pasien/tambah_lansia_screen.dart';
+import 'pasien/edit_lansia_screen.dart';
 import '../widgets/app_toast.dart';
 
 class PasienScreen extends StatefulWidget {
@@ -20,38 +21,146 @@ class _PasienScreenState extends State<PasienScreen> {
 
   final List<String> _categories = ['Semua', 'Hipertensi', 'Diabetes', 'Rutin'];
 
-  final List<Map<String, dynamic>> _allPatients = [
-    {
-      'name': 'Siti Rahayu',
-      'age': '68',
-      'address': 'Jl. Melati No. 42, RT 05/02',
-      'gender': 'Perempuan',
-      'birthDate': DateTime(1955, 4, 14),
-      'category': 'Hipertensi',
-      'avatarBg': AppColors.secondaryContainer,
-      'avatarColor': AppColors.primary,
-    },
-    {
-      'name': 'Bambang Wijaya',
-      'age': '72',
-      'address': 'Perum Griya Indah, Blok C9',
-      'gender': 'Laki-laki',
-      'birthDate': DateTime(1951, 11, 23),
-      'category': 'Diabetes',
-      'avatarBg': const Color(0x1BBA5855), // tertiary container light variant
-      'avatarColor': AppColors.tertiary,
-    },
-    {
-      'name': 'Aminah Sulastri',
-      'age': '65',
-      'address': 'Kp. Baru, Gg. Sayur No. 12',
-      'gender': 'Perempuan',
-      'birthDate': DateTime(1958, 9, 8),
-      'category': 'Rutin',
-      'avatarBg': AppColors.secondaryContainer,
-      'avatarColor': AppColors.primary,
-    },
-  ];
+  List<Map<String, dynamic>> _allPatients = [];
+  int _unscreenedPatientsCount = 0;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPatients();
+  }
+
+  Future<void> _fetchPatients() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+    });
+    try {
+      final patientResponse = await Supabase.instance.client
+          .from('patients')
+          .select()
+          .order('name', ascending: true);
+      
+      final List<Map<String, dynamic>> patients = List<Map<String, dynamic>>.from(patientResponse);
+
+      final screeningResponse = await Supabase.instance.client
+          .from('screenings')
+          .select('patient_id, date, status, blood_pressure, blood_sugar');
+
+      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningResponse);
+
+      final Map<String, List<DateTime>> screeningDatesMap = {};
+      final Map<String, Map<String, dynamic>> latestScreeningMap = {};
+      
+      for (final s in screenings) {
+        final pid = s['patient_id'] as String;
+        final dateStr = s['date'] as String;
+        final date = DateTime.parse(dateStr);
+        
+        if (!screeningDatesMap.containsKey(pid)) {
+          screeningDatesMap[pid] = [];
+        }
+        screeningDatesMap[pid]!.add(date);
+        
+        final currentLatest = latestScreeningMap[pid];
+        if (currentLatest == null || date.isAfter(DateTime.parse(currentLatest['date'] as String))) {
+          latestScreeningMap[pid] = s;
+        }
+      }
+
+      final now = DateTime.now();
+      int unscreenedCount = 0;
+
+      final mappedPatients = patients.map((patient) {
+        final pid = patient['id'] as String;
+        final birthDateStr = patient['birth_date'] as String;
+        final birthDate = DateTime.parse(birthDateStr);
+        final age = (DateTime.now().difference(birthDate).inDays / 365).floor().toString();
+        final gender = patient['gender'] as String;
+        
+        final patientScreeningDates = screeningDatesMap[pid] ?? [];
+        final isScreenedThisMonth = patientScreeningDates.any((date) => date.year == now.year && date.month == now.month);
+        
+        if (!isScreenedThisMonth) {
+          unscreenedCount++;
+        }
+        
+        String healthStatus = 'Kesehatan Stabil';
+        final latestS = latestScreeningMap[pid];
+        if (latestS != null) {
+          final bpStr = latestS['blood_pressure'] as String?;
+          final sugarVal = latestS['blood_sugar'] != null ? double.tryParse(latestS['blood_sugar'].toString()) : null;
+          
+          bool hasHighBP = false;
+          bool hasPreBP = false;
+          if (bpStr != null && bpStr.contains('/')) {
+            final parts = bpStr.split('/');
+            if (parts.length == 2) {
+              final sys = int.tryParse(parts[0].trim());
+              final dia = int.tryParse(parts[1].trim());
+              if (sys != null && dia != null) {
+                if (sys >= 140 || dia >= 90) {
+                  hasHighBP = true;
+                } else if (sys >= 120 || dia >= 80) {
+                  hasPreBP = true;
+                }
+              }
+            }
+          }
+          
+          bool hasHighSugar = sugarVal != null && sugarVal >= 200;
+          bool hasPreSugar = sugarVal != null && sugarVal >= 140;
+
+          if (hasHighBP || hasHighSugar) {
+            healthStatus = 'Perlu Perhatian';
+          } else if (hasPreBP || hasPreSugar) {
+            healthStatus = 'Pantauan Sedang';
+          } else {
+            healthStatus = 'Kesehatan Stabil';
+          }
+        } else {
+          healthStatus = 'Belum Ada Skrining';
+        }
+        
+        return {
+          'id': pid,
+          'name': patient['name'],
+          'age': age,
+          'address': patient['address'],
+          'gender': gender,
+          'birthDate': birthDate,
+          'category': patient['category'] ?? 'Rutin',
+          'healthStatus': healthStatus,
+          'avatarBg': gender == 'Laki-laki' 
+              ? const Color(0x1BBA5855) 
+              : AppColors.secondaryContainer,
+          'avatarColor': gender == 'Laki-laki' 
+              ? AppColors.tertiary 
+              : AppColors.primary,
+        };
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _allPatients = mappedPatients;
+          _unscreenedPatientsCount = unscreenedCount;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        AppToast.show(
+          context: context,
+          message: 'Gagal memuat data pasien: $e',
+          type: AppToastType.error,
+        );
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -83,11 +192,11 @@ class _PasienScreenState extends State<PasienScreen> {
                 Expanded(
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.only(
+                    padding: EdgeInsets.only(
                       left: 20.0,
                       right: 20.0,
                       top: 24.0,
-                      bottom: 120.0, // Space for BottomNavBar & FAB
+                      bottom: 140.0 + MediaQuery.of(context).padding.bottom, // Space for BottomNavBar & FAB
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -110,7 +219,7 @@ class _PasienScreenState extends State<PasienScreen> {
           // Contextual FAB for adding a patient
           Positioned(
             right: 20.0,
-            bottom: 100.0, // Just above BottomNavigationBar
+            bottom: 108.0 + MediaQuery.of(context).padding.bottom, // Just above BottomNavigationBar
             child: _buildAddFAB(),
           ),
         ],
@@ -335,7 +444,7 @@ class _PasienScreenState extends State<PasienScreen> {
                   ),
                   const SizedBox(height: 4.0),
                   Text(
-                    '142',
+                    '${_allPatients.length}',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
@@ -385,7 +494,7 @@ class _PasienScreenState extends State<PasienScreen> {
                   ),
                   const SizedBox(height: 4.0),
                   Text(
-                    '12',
+                    '$_unscreenedPatientsCount',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
@@ -422,6 +531,16 @@ class _PasienScreenState extends State<PasienScreen> {
 
   // Dynamic Card List
   Widget _buildPatientList() {
+    if (_isLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 48.0),
+          child: CircularProgressIndicator(
+            color: AppColors.primary,
+          ),
+        ),
+      );
+    }
     final filtered = _filteredPatients;
 
     return Column(
@@ -602,46 +721,24 @@ class _PasienScreenState extends State<PasienScreen> {
                                 ? DateTime(1951, 11, 23) 
                                 : DateTime(1958, 9, 8));
 
-                    // Display image url if Siti Rahayu
-                    String? imageUrl;
-                    if (patient['name'] == 'Siti Rahayu') {
-                      imageUrl = 'https://lh3.googleusercontent.com/aida-public/AB6AXuDUdi3GBhjO6NadyJZeM6loUempWcNwyCwZBJ7wrYHf-AkmnnGjgMGIzQsCE-pcOwu_Kjd7uV7yCmNUStK8F5ovw8zqmFN5OEDU2KFycdlG44zTJv-3t_FawQoEPmEFXI3qROLIdmqZSkuSuTXoey1ZAhdcdSDQ3JVPY3ca6UX5RdVF440tjIQUa-6kodU6aAh1iDqbaXGvezS7EvC-AYD6-9AD7jq3XvvhuxlWgqr7aSdGgTYdGP8a4R75OsR90UXKRx413Jfu55ij';
-                    }
-
                     final result = await Navigator.push<Map<String, dynamic>>(
                       context,
                       MaterialPageRoute(
                         builder: (context) => EditLansiaScreen(
+                          id: patient['id'],
                           index: _allPatients.indexOf(patient),
                           initialName: patient['name'] as String,
                           initialGender: gender as String,
                           initialBirthDate: birthDate as DateTime,
                           initialAddress: patient['address'] as String,
-                          imageUrl: imageUrl,
                           avatarBg: patient['avatarBg'] as Color?,
                           avatarColor: patient['avatarColor'] as Color?,
                         ),
                       ),
                     );
 
-                    if (result != null) {
-                      setState(() {
-                        final idx = _allPatients.indexOf(patient);
-                        if (idx != -1) {
-                          _allPatients[idx] = {
-                            ..._allPatients[idx],
-                            ...result,
-                          };
-                        }
-                      });
-
-                      if (mounted) {
-                        AppToast.show(
-                          context: context,
-                          message: 'Data ${result['name']} berhasil diperbarui',
-                          type: AppToastType.success,
-                        );
-                      }
+                    if (result != null && mounted) {
+                      _fetchPatients();
                     }
                   },
                   child: Container(
@@ -690,16 +787,13 @@ class _PasienScreenState extends State<PasienScreen> {
                               : '08 September 1958';
                     }
 
-                    final healthStatus = name == 'Siti Rahayu' 
-                        ? 'Hipertensi Terkontrol' 
-                        : name == 'Bambang Wijaya' 
-                            ? 'Diabetes Terkontrol' 
-                            : 'Kesehatan Stabil';
+                    final healthStatus = patient['healthStatus'] as String? ?? 'Kesehatan Stabil';
 
                     final result = await Navigator.push<Map<String, dynamic>>(
                       context,
                       MaterialPageRoute(
                         builder: (context) => DetailPasienScreen(
+                          id: patient['id'],
                           name: name,
                           age: age,
                           gender: gender as String,
@@ -715,44 +809,7 @@ class _PasienScreenState extends State<PasienScreen> {
                     );
 
                     if (result != null && mounted) {
-                      final action = result['action'];
-                      final idx = _allPatients.indexOf(patient);
-                      if (idx != -1) {
-                        if (action == 'delete') {
-                          setState(() {
-                            _allPatients.removeAt(idx);
-                          });
-                          if (mounted) {
-                            AppToast.show(
-                              context: context,
-                              message: 'Data $name berhasil dihapus',
-                              type: AppToastType.error,
-                            );
-                          }
-                        } else if (action == 'edit') {
-                          setState(() {
-                            final DateTime bDateTime = result['birthDate'] as DateTime;
-                            final ageStr = (DateTime.now().difference(bDateTime).inDays / 365).floor().toString();
-                            
-                            _allPatients[idx] = {
-                              ..._allPatients[idx],
-                              'name': result['name'] ?? _allPatients[idx]['name'],
-                              'age': ageStr,
-                              'address': result['address'] ?? _allPatients[idx]['address'],
-                              'gender': result['gender'] ?? _allPatients[idx]['gender'],
-                              'birthDate': bDateTime,
-                            };
-                          });
-
-                          if (mounted) {
-                            AppToast.show(
-                              context: context,
-                              message: 'Data ${result['name']} berhasil diperbarui',
-                              type: AppToastType.success,
-                            );
-                          }
-                        }
-                      }
+                      _fetchPatients();
                     }
                   },
                   child: Container(
@@ -798,18 +855,8 @@ class _PasienScreenState extends State<PasienScreen> {
           ),
         );
 
-        if (result != null) {
-          setState(() {
-            _allPatients.insert(0, result);
-          });
-
-          if (mounted) {
-            AppToast.show(
-              context: context,
-              message: '${result['name']} berhasil ditambahkan ke daftar',
-              type: AppToastType.success,
-            );
-          }
+        if (result != null && mounted) {
+          _fetchPatients();
         }
       },
       child: Container(

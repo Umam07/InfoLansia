@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
-import 'skrining_baru_screen.dart';
-import 'detail_pasien_screen.dart';
+import 'skrining/skrining_baru_screen.dart';
+import 'pasien/detail_pasien_screen.dart';
 import '../widgets/app_toast.dart';
 
 class SkriningScreen extends StatefulWidget {
@@ -17,52 +18,91 @@ class _SkriningScreenState extends State<SkriningScreen> {
   String _searchQuery = '';
   String _selectedCategory = 'Semua';
 
-  final List<String> _categories = ['Semua', 'Hipertensi', 'Diabetes', 'Rutin'];
-
-  // High-fidelity patients list with their screening dates record
-  final List<Map<String, dynamic>> _patients = [
-    {
-      'name': 'Siti Rahayu',
-      'age': '68',
-      'address': 'Jl. Melati No. 42, RT 05/02',
-      'gender': 'Perempuan',
-      'birthDate': DateTime(1955, 4, 14),
-      'category': 'Hipertensi',
-      'avatarBg': AppColors.secondaryContainer,
-      'avatarColor': AppColors.primary,
-      'screenings': [
-        DateTime(2026, 5, 12),
-        DateTime(2026, 4, 15),
-      ],
-    },
-    {
-      'name': 'Bambang Wijaya',
-      'age': '72',
-      'address': 'Perum Griya Indah, Blok C9',
-      'gender': 'Laki-laki',
-      'birthDate': DateTime(1951, 11, 23),
-      'category': 'Diabetes',
-      'avatarBg': const Color(0x1BBA5855),
-      'avatarColor': AppColors.tertiary,
-      'screenings': [
-        DateTime(2026, 5, 15),
-        DateTime(2026, 3, 12),
-      ],
-    },
-    {
-      'name': 'Aminah Sulastri',
-      'age': '65',
-      'address': 'Kp. Baru, Gg. Sayur No. 12',
-      'gender': 'Perempuan',
-      'birthDate': DateTime(1958, 9, 8),
-      'category': 'Rutin',
-      'avatarBg': AppColors.secondaryContainer,
-      'avatarColor': AppColors.primary,
-      'screenings': [
-        DateTime(2026, 4, 15),
-      ],
-    },
+  final List<String> _categories = [
+    'Semua',
+    'Belum Skrining',
+    'Sudah Skrining',
   ];
+
+  List<Map<String, dynamic>> _allPatients = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPatients();
+  }
+
+  Future<void> _fetchPatients() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+    });
+    try {
+      final patientResponse = await Supabase.instance.client
+          .from('patients')
+          .select()
+          .order('name', ascending: true);
+
+      final List<Map<String, dynamic>> patients = List<Map<String, dynamic>>.from(patientResponse);
+
+      final screeningResponse = await Supabase.instance.client
+          .from('screenings')
+          .select('patient_id, date');
+
+      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningResponse);
+
+      final Map<String, List<DateTime>> screeningMap = {};
+      for (final s in screenings) {
+        final pid = s['patient_id'] as String;
+        final dateStr = s['date'] as String;
+        final date = DateTime.parse(dateStr);
+        if (!screeningMap.containsKey(pid)) {
+          screeningMap[pid] = [];
+        }
+        screeningMap[pid]!.add(date);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _allPatients = patients.map((patient) {
+          final pid = patient['id'] as String;
+          final birthDateStr = patient['birth_date'] as String;
+          final birthDate = DateTime.parse(birthDateStr);
+          final age = (DateTime.now().difference(birthDate).inDays / 365).floor().toString();
+          final gender = patient['gender'] as String;
+
+          return {
+            'id': pid,
+            'name': patient['name'] as String,
+            'age': age,
+            'address': patient['address'] as String,
+            'gender': gender,
+            'birthDate': birthDate,
+            'category': patient['category'] ?? 'Rutin',
+            'avatarBg': gender == 'Laki-laki'
+                ? const Color(0x1BBA5855)
+                : AppColors.secondaryContainer,
+            'avatarColor': gender == 'Laki-laki'
+                ? AppColors.tertiary
+                : AppColors.primary,
+            'screenings': screeningMap[pid] ?? <DateTime>[],
+          };
+        }).toList();
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      AppToast.show(
+        context: context,
+        message: 'Gagal memuat data skrining: $e',
+        type: AppToastType.error,
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -70,24 +110,32 @@ class _SkriningScreenState extends State<SkriningScreen> {
     super.dispose();
   }
 
-  // Check if a patient has been screened in the current month & year (June 2026)
+  // Check if a patient has been screened in the current month & year
   bool _isAlreadyScreenedThisMonth(List<DateTime> screenings) {
     final now = DateTime.now();
     return screenings.any((date) => date.year == now.year && date.month == now.month);
   }
 
   // Calculate statistics dynamically
-  int get _totalPatients => _patients.length;
-  int get _screenedCount => _patients.where((p) => _isAlreadyScreenedThisMonth(p['screenings'] as List<DateTime>)).length;
+  int get _totalPatients => _allPatients.length;
+  int get _screenedCount => _allPatients.where((p) => _isAlreadyScreenedThisMonth(p['screenings'] as List<DateTime>)).length;
   int get _remainingCount => _totalPatients - _screenedCount;
 
   List<Map<String, dynamic>> get _filteredPatients {
-    return _patients.where((patient) {
-      final matchesCategory = _selectedCategory == 'Semua' ||
-          patient['category'] == _selectedCategory;
+    return _allPatients.where((patient) {
       final matchesSearch =
           patient['name'].toLowerCase().contains(_searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
+      if (!matchesSearch) return false;
+
+      final screenings = patient['screenings'] as List<DateTime>;
+      final isScreened = _isAlreadyScreenedThisMonth(screenings);
+
+      if (_selectedCategory == 'Belum Skrining') {
+        return !isScreened;
+      } else if (_selectedCategory == 'Sudah Skrining') {
+        return isScreened;
+      }
+      return true; // 'Semua'
     }).toList();
   }
 
@@ -418,8 +466,17 @@ class _SkriningScreenState extends State<SkriningScreen> {
     );
   }
 
-  // Patient Card List
   Widget _buildPatientList() {
+    if (_isLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 48.0),
+          child: CircularProgressIndicator(
+            color: AppColors.primary,
+          ),
+        ),
+      );
+    }
     final filtered = _filteredPatients;
 
     if (filtered.isEmpty) {
@@ -650,17 +707,17 @@ class _SkriningScreenState extends State<SkriningScreen> {
                         context,
                         MaterialPageRoute(
                           builder: (context) => SkriningBaruScreen(
+                            patientId: patient['id'] as String,
                             name: name,
                             age: age,
+                            gender: patient['gender'] as String,
                             existingScreenings: screenings,
                           ),
                         ),
                       );
 
                       if (result == true && mounted) {
-                        setState(() {
-                          screenings.add(DateTime.now());
-                        });
+                        _fetchPatients();
                         AppToast.show(
                           context: context,
                           message: 'Hasil skrining untuk $name berhasil disimpan',
@@ -713,29 +770,30 @@ class _SkriningScreenState extends State<SkriningScreen> {
   }
 
   // Navigate to patient detail
-  void _navigateToDetail(Map<String, dynamic> patient) {
+  void _navigateToDetail(Map<String, dynamic> patient) async {
     final name = patient['name'] as String;
     final age = patient['age'] as String;
     final address = patient['address'] as String;
     final gender = patient['gender'] as String;
     final bDate = patient['birthDate'] as DateTime;
-    
+
     final months = [
       'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
       'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
     ];
     final birthDateStr = '${bDate.day} ${months[bDate.month - 1]} ${bDate.year}';
 
-    final healthStatus = name == 'Siti Rahayu' 
-        ? 'Hipertensi Terkontrol' 
-        : name == 'Bambang Wijaya' 
-            ? 'Diabetes Terkontrol' 
+    final healthStatus = name == 'Siti Rahayu'
+        ? 'Hipertensi Terkontrol'
+        : name == 'Bambang Wijaya'
+            ? 'Diabetes Terkontrol'
             : 'Kesehatan Stabil';
 
-    Navigator.push(
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DetailPasienScreen(
+          id: patient['id'] as String?,
           name: name,
           age: age,
           gender: gender,
@@ -748,6 +806,9 @@ class _SkriningScreenState extends State<SkriningScreen> {
         ),
       ),
     );
+    if (mounted) {
+      _fetchPatients();
+    }
   }
 }
 

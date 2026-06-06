@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
-import 'layanan_tensi_screen.dart';
-import 'layanan_gula_darah_screen.dart';
-import 'visualisasi_tahunan_screen.dart';
+import 'layanan/layanan_tensi_screen.dart';
+import 'layanan/layanan_gula_darah_screen.dart';
+import 'layanan/visualisasi_tahunan_screen.dart';
 import '../widgets/app_toast.dart';
 
 class LayananScreen extends StatefulWidget {
@@ -29,11 +30,38 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
   ];
 
-  final List<String> _years = ['2026'];
+  final List<String> _years = ['2025', '2026', '2027'];
+
+  final Map<String, int> _monthMap = {
+    'Januari': 1, 'Februari': 2, 'Maret': 3, 'April': 4, 'Mei': 5, 'Juni': 6,
+    'Juli': 7, 'Agustus': 8, 'September': 9, 'Oktober': 10, 'November': 11, 'Desember': 12
+  };
+
+  int _totalScreeningsCount = 0;
+  int _growthPct = 0;
+  int _normalCount = 0;
+  int _warningCount = 0;
+  int _dangerCount = 0;
+  double _normalPct = 0.0;
+  double _warningPct = 0.0;
+  double _dangerPct = 0.0;
+  int _totalTensi = 0;
+  int _tensiRate = 0;
+  int _totalGula = 0;
+  int _gulaRate = 0;
 
   @override
   void initState() {
     super.initState();
+    // Set current month and year dynamically
+    final now = DateTime.now();
+    final months = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    _selectedMonth = months[now.month - 1];
+    _selectedYear = now.year.toString();
+
     _progressController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -43,12 +71,7 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
       curve: Curves.easeOutCubic,
     );
 
-    // Start progress bar animation after a brief delay
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) {
-        _progressController.forward();
-      }
-    });
+    _fetchReportData();
   }
 
   @override
@@ -57,27 +80,142 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     super.dispose();
   }
 
-  void _handleSearch() {
+  Future<void> _fetchReportData() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
     });
+    try {
+      final patientsResponse = await Supabase.instance.client
+          .from('patients')
+          .select('id');
+      final totalPatients = patientsResponse.length;
 
-    // Simulate load state like HTML
-    Future.delayed(const Duration(milliseconds: 1200), () {
+      int monthInt = _monthMap[_selectedMonth] ?? 1;
+      int yearInt = int.tryParse(_selectedYear) ?? DateTime.now().year;
+
+      final startOfMonth = DateTime(yearInt, monthInt, 1).toIso8601String().split('T').first;
+      final endOfMonth = DateTime(yearInt, monthInt + 1, 1).subtract(const Duration(days: 1)).toIso8601String().split('T').first;
+
+      final screeningsResponse = await Supabase.instance.client
+          .from('screenings')
+          .select()
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth);
+
+      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningsResponse);
+
+      final lastMonth = monthInt == 1 ? 12 : monthInt - 1;
+      final lastMonthYear = monthInt == 1 ? yearInt - 1 : yearInt;
+      final startOfLastMonth = DateTime(lastMonthYear, lastMonth, 1).toIso8601String().split('T').first;
+      final endOfLastMonth = DateTime(lastMonthYear, lastMonth + 1, 1).subtract(const Duration(days: 1)).toIso8601String().split('T').first;
+
+      final lastMonthResponse = await Supabase.instance.client
+          .from('screenings')
+          .select('id')
+          .gte('date', startOfLastMonth)
+          .lte('date', endOfLastMonth);
+
+      final lastMonthCount = lastMonthResponse.length;
+      final thisMonthCount = screenings.length;
+
+      int growthPct = 0;
+      if (lastMonthCount > 0) {
+        growthPct = (((thisMonthCount - lastMonthCount) / lastMonthCount) * 100).round();
+      } else if (thisMonthCount > 0) {
+        growthPct = 100;
+      }
+
+      int normalCount = 0;
+      int warningCount = 0;
+      int dangerCount = 0;
+
+      int totalTensi = 0;
+      int totalGula = 0;
+
+      for (final s in screenings) {
+        final bpStr = s['blood_pressure'] as String?;
+        String bpStatus = 'Normal';
+        if (bpStr != null && bpStr.contains('/')) {
+          final parts = bpStr.split('/');
+          if (parts.length == 2) {
+            final sys = int.tryParse(parts[0].trim());
+            final dia = int.tryParse(parts[1].trim());
+            if (sys != null && dia != null) {
+              totalTensi++;
+              if (sys >= 140 || dia >= 90) {
+                bpStatus = 'Hipertensi';
+              } else if (sys >= 120 || dia >= 80) {
+                bpStatus = 'Pre-Hipertensi';
+              }
+            }
+          }
+        }
+
+        final sugarVal = s['blood_sugar'] != null ? int.tryParse(s['blood_sugar'].toString()) : null;
+        String sugarStatus = 'Normal';
+        if (sugarVal != null) {
+          totalGula++;
+          if (sugarVal >= 200) {
+            sugarStatus = 'Diabetes';
+          } else if (sugarVal >= 140) {
+            sugarStatus = 'Pre-Diabetes';
+          }
+        }
+
+        if (bpStatus == 'Hipertensi' || sugarStatus == 'Diabetes') {
+          dangerCount++;
+        } else if (bpStatus == 'Pre-Hipertensi' || sugarStatus == 'Pre-Diabetes') {
+          warningCount++;
+        } else {
+          normalCount++;
+        }
+      }
+
+      final totalScreened = screenings.length;
+      final normalPct = totalScreened > 0 ? normalCount / totalScreened : 0.0;
+      final warningPct = totalScreened > 0 ? warningCount / totalScreened : 0.0;
+      final dangerPct = totalScreened > 0 ? dangerCount / totalScreened : 0.0;
+
+      final tensiRate = totalPatients > 0 ? (totalTensi / totalPatients * 100).round() : 0;
+      final gulaRate = totalPatients > 0 ? (totalGula / totalPatients * 100).round() : 0;
+
+      if (mounted) {
+        setState(() {
+          _totalScreeningsCount = thisMonthCount;
+          _growthPct = growthPct;
+          _normalCount = normalCount;
+          _warningCount = warningCount;
+          _dangerCount = dangerCount;
+          _normalPct = normalPct;
+          _warningPct = warningPct;
+          _dangerPct = dangerPct;
+          _totalTensi = totalTensi;
+          _tensiRate = tensiRate;
+          _totalGula = totalGula;
+          _gulaRate = gulaRate;
+          _isLoading = false;
+        });
+
+        _progressController.reset();
+        _progressController.forward();
+      }
+    } catch (e) {
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
         AppToast.show(
           context: context,
-          message: 'Menampilkan Laporan $_selectedMonth $_selectedYear',
-          type: AppToastType.success,
+          message: 'Gagal memuat data laporan: $e',
+          type: AppToastType.error,
         );
-        // Re-animate progress bars
-        _progressController.reset();
-        _progressController.forward();
       }
-    });
+    }
+  }
+
+  void _handleSearch() {
+    _fetchReportData();
   }
 
   @override
@@ -409,7 +547,7 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
                       ),
                       const SizedBox(height: 4.0),
                       Text(
-                        '1.248',
+                        '$_totalScreeningsCount',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 32,
                           fontWeight: FontWeight.w800,
@@ -421,14 +559,14 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
                   ),
                   Row(
                     children: [
-                      const Icon(
-                        Icons.trending_up_rounded,
+                      Icon(
+                        _growthPct >= 0 ? Icons.trending_up_rounded : Icons.trending_down_rounded,
                         color: AppColors.primaryFixed,
                         size: 16,
                       ),
                       const SizedBox(width: 4.0),
                       Text(
-                        '+12% dari bulan lalu',
+                        '${_growthPct >= 0 ? '+' : ''}$_growthPct% dari bulan lalu',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -478,24 +616,24 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
               // Normal Bar
               _buildHealthProgressBar(
                 label: 'Normal',
-                count: '842 Pasien (67%)',
-                percentage: 0.67,
+                count: '$_normalCount Pasien (${(_normalPct * 100).round()}%)',
+                percentage: _normalPct,
                 color: AppColors.primary,
               ),
               const SizedBox(height: 20.0),
               // Risiko Sedang Bar
               _buildHealthProgressBar(
                 label: 'Risiko Sedang',
-                count: '312 Pasien (25%)',
-                percentage: 0.25,
+                count: '$_warningCount Pasien (${(_warningPct * 100).round()}%)',
+                percentage: _warningPct,
                 color: AppColors.statusWarning,
               ),
               const SizedBox(height: 20.0),
               // Risiko Tinggi Bar
               _buildHealthProgressBar(
                 label: 'Risiko Tinggi',
-                count: '94 Pasien (8%)',
-                percentage: 0.08,
+                count: '$_dangerCount Pasien (${(_dangerPct * 100).round()}%)',
+                percentage: _dangerPct,
                 color: AppColors.error,
               ),
             ],
@@ -655,14 +793,16 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
           icon: Icons.monitor_heart_rounded,
           iconBg: AppColors.secondaryContainer,
           iconColor: AppColors.onSecondaryContainer,
-          statusLabel: 'Aktif',
-          statusBg: AppColors.primary.withValues(alpha: 0.08),
-          statusTextColor: AppColors.primary,
+          statusLabel: _tensiRate >= 80 ? 'Aktif' : 'Perlu Perhatian',
+          statusBg: _tensiRate >= 80 
+              ? AppColors.primary.withValues(alpha: 0.08) 
+              : AppColors.statusWarning.withValues(alpha: 0.08),
+          statusTextColor: _tensiRate >= 80 ? AppColors.primary : AppColors.statusWarning,
           title: 'Pemeriksaan Tensi',
           subtitle: 'Skrining tekanan darah rutin lansia.',
-          total: '1.102',
-          rate: '92%',
-          rateColor: AppColors.primary,
+          total: '$_totalTensi',
+          rate: '$_tensiRate%',
+          rateColor: _tensiRate >= 80 ? AppColors.primary : AppColors.statusWarning,
         ),
         const SizedBox(height: 16.0),
         // Card 2: Cek Gula Darah
@@ -670,14 +810,16 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
           icon: Icons.medical_information_rounded,
           iconBg: AppColors.tertiaryFixed,
           iconColor: AppColors.tertiary,
-          statusLabel: 'Perhatian',
-          statusBg: AppColors.statusWarning.withValues(alpha: 0.08),
-          statusTextColor: AppColors.statusWarning,
+          statusLabel: _gulaRate >= 80 ? 'Aktif' : 'Perhatian',
+          statusBg: _gulaRate >= 80 
+              ? AppColors.primary.withValues(alpha: 0.08) 
+              : AppColors.statusWarning.withValues(alpha: 0.08),
+          statusTextColor: _gulaRate >= 80 ? AppColors.primary : AppColors.statusWarning,
           title: 'Cek Gula Darah',
           subtitle: 'Pemantauan glukosa bulanan.',
-          total: '482',
-          rate: '76%',
-          rateColor: AppColors.statusWarning,
+          total: '$_totalGula',
+          rate: '$_gulaRate%',
+          rateColor: _gulaRate >= 80 ? AppColors.primary : AppColors.statusWarning,
         ),
       ],
     );
