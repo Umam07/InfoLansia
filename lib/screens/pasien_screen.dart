@@ -132,6 +132,7 @@ class _PasienScreenState extends State<PasienScreen> {
           'birthDate': birthDate,
           'category': patient['category'] ?? 'Rutin',
           'healthStatus': healthStatus,
+          'createdAt': patient['created_at'] != null ? DateTime.parse(patient['created_at'] as String) : DateTime.now(),
           'avatarBg': gender == 'Laki-laki' 
               ? const Color(0x1BBA5855) 
               : AppColors.secondaryContainer,
@@ -733,6 +734,7 @@ class _PasienScreenState extends State<PasienScreen> {
                           initialAddress: patient['address'] as String,
                           avatarBg: patient['avatarBg'] as Color?,
                           avatarColor: patient['avatarColor'] as Color?,
+                          createdAt: patient['createdAt'] as DateTime?,
                         ),
                       ),
                     );
@@ -804,6 +806,7 @@ class _PasienScreenState extends State<PasienScreen> {
                           index: _allPatients.indexOf(patient),
                           avatarBg: patient['avatarBg'] as Color?,
                           avatarColor: patient['avatarColor'] as Color?,
+                          createdAt: patient['createdAt'] as DateTime?,
                         ),
                       ),
                     );

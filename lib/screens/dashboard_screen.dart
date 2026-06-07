@@ -98,6 +98,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  void _navigateToPage(int index) {
+    if ((index - _currentIndex).abs() > 1) {
+      _pageController.jumpToPage(index > _currentIndex ? index - 1 : index + 1);
+    }
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -608,11 +619,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 title: 'Skrining Baru',
                 subtitle: 'Input pemeriksaan rutin',
                 onTap: () {
-                  _pageController.animateToPage(
-                    2,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                  );
+                  _navigateToPage(2);
                   AppToast.show(
                     context: context,
                     message: 'Pilih pasien terlebih dahulu untuk memulai skrining',
@@ -627,11 +634,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 title: 'Riwayat',
                 subtitle: 'Cek data sebelumnya',
                 onTap: () {
-                  _pageController.animateToPage(
-                    3,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                  );
+                  _navigateToPage(3);
                   AppToast.show(
                     context: context,
                     message: 'Pilih pasien untuk melihat riwayat pemeriksaan',
@@ -646,11 +649,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 title: 'Data Lansia',
                 subtitle: 'Manajemen biodata pasien',
                 onTap: () {
-                  _pageController.animateToPage(
-                    3,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                  );
+                  _navigateToPage(3);
                 },
               ),
             ],
@@ -950,11 +949,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
           onTap: () {
-            _pageController.animateToPage(
-              index,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
+            _navigateToPage(index);
           },
           behavior: HitTestBehavior.opaque,
           child: Column(

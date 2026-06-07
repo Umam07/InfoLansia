@@ -104,10 +104,11 @@ class _LoginScreenState extends State<LoginScreen>
       setState(() {
         _isLoading = false;
       });
+      debugPrint('Google Sign-In Error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Login Gagal: $e'),
+          const SnackBar(
+            content: Text('Gagal masuk menggunakan Google. Silakan coba kembali.'),
             backgroundColor: AppColors.error,
           ),
         );

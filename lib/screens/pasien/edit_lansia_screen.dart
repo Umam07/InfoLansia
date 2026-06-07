@@ -12,6 +12,7 @@ class EditLansiaScreen extends StatefulWidget {
   final String initialAddress;
   final Color? avatarBg;
   final Color? avatarColor;
+  final DateTime? createdAt;
 
   const EditLansiaScreen({
     super.key,
@@ -23,6 +24,7 @@ class EditLansiaScreen extends StatefulWidget {
     required this.initialAddress,
     this.avatarBg,
     this.avatarColor,
+    this.createdAt,
   });
 
   @override
@@ -44,6 +46,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
   // Submit Button State
   bool _isLoading = false;
   bool _isSuccess = false;
+  late DateTime _lastUpdatedDate;
 
   @override
   void initState() {
@@ -53,6 +56,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     _dateController = TextEditingController(text: _formatDisplayDate(_selectedDate));
     _addressController = TextEditingController(text: widget.initialAddress);
     _gender = widget.initialGender;
+    _lastUpdatedDate = widget.createdAt ?? DateTime.now();
   }
 
   @override
@@ -69,6 +73,14 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     String day = date.day.toString().padLeft(2, '0');
     String month = date.month.toString().padLeft(2, '0');
     return '$day/$month/${date.year}';
+  }
+
+  String _formatLastUpdatedDate(DateTime date) {
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+      'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
   // Date Picker Trigger
@@ -127,6 +139,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
         setState(() {
           _isLoading = false;
           _isSuccess = true;
+          _lastUpdatedDate = DateTime.now();
         });
 
         // After success label delay (1 second), pop back with updated data
@@ -143,6 +156,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
             'category': 'Rutin',
             'avatarBg': widget.avatarBg ?? AppColors.secondaryContainer,
             'avatarColor': widget.avatarColor ?? AppColors.primary,
+            'createdAt': _lastUpdatedDate,
           };
 
           Navigator.pop(context, updatedPatient);
@@ -245,7 +259,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
                     const SizedBox(height: 8.0),
                     Center(
                       child: Text(
-                        'Terakhir diperbarui: 12 Okt 2026',
+                        'Terakhir diperbarui: ${_formatLastUpdatedDate(_lastUpdatedDate)}',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 12,
                           color: AppColors.textSecondary,

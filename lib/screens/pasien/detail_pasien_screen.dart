@@ -19,6 +19,7 @@ class DetailPasienScreen extends StatefulWidget {
   final int? index;
   final Color? avatarBg;
   final Color? avatarColor;
+  final DateTime? createdAt;
 
   const DetailPasienScreen({
     super.key,
@@ -33,6 +34,7 @@ class DetailPasienScreen extends StatefulWidget {
     this.index,
     this.avatarBg,
     this.avatarColor,
+    this.createdAt,
   });
 
   @override
@@ -243,6 +245,7 @@ class _DetailPasienScreenState extends State<DetailPasienScreen> {
           initialAddress: _address,
           avatarBg: widget.avatarBg,
           avatarColor: widget.avatarColor,
+          createdAt: widget.createdAt,
         ),
       ),
     );

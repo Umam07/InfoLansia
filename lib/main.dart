@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'constants/supabase_config.dart';
 import 'theme.dart';
 import 'screens/login_screen.dart';
+import 'screens/dashboard_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,11 +14,13 @@ void main() async {
     publishableKey: SupabaseConfig.anonKey,
   );
 
+  final session = Supabase.instance.client.auth.currentSession;
+
   // Pre-cache semua varian Google Fonts yang dipakai di app
   // agar tidak ada network request saat widget rebuild (keyboard muncul)
   await _prefetchFonts();
   
-  runApp(const MyApp());
+  runApp(MyApp(showDashboard: session != null));
 }
 
 /// Pre-fetch all Google Fonts variants used throughout the app
@@ -46,7 +49,8 @@ Future<void> _prefetchFonts() async {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool showDashboard;
+  const MyApp({super.key, required this.showDashboard});
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +58,7 @@ class MyApp extends StatelessWidget {
       title: 'Posyandu Cloud',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const LoginScreen(),
+      home: showDashboard ? const DashboardScreen() : const LoginScreen(),
     );
   }
 }

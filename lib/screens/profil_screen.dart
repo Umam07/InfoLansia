@@ -572,7 +572,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
       child: Opacity(
         opacity: 0.6,
         child: Text(
-          'Versi Aplikasi 1.1.0',
+          'Versi Aplikasi 1.1.1',
           style: GoogleFonts.plusJakartaSans(
             fontSize: 12.0,
             color: AppColors.textSecondary,
@@ -1409,7 +1409,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   ),
                   const SizedBox(height: 4.0),
                   Text(
-                    'Versi 1.1.0 (Cloud)',
+                    'Versi 1.1.1',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
                       color: AppColors.textSecondary,
