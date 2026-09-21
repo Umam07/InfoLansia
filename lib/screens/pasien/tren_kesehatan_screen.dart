@@ -74,8 +74,6 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
           .from('screenings')
           .select()
           .eq('patient_id', widget.patientId)
-          .gte('date', '2026-01-01')
-          .lte('date', '2026-12-31')
           .order('date', ascending: true);
 
       final List<Map<String, dynamic>> data = List<Map<String, dynamic>>.from(response);
@@ -106,75 +104,21 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
 
       final List<MonthlyHealthData> monthlyList = [];
 
-      // Find the month of the last checkup in 2026
-      int endMonth = 1; // Default to Jan if no records
-      if (parsedScreenings.isNotEmpty) {
-        endMonth = parsedScreenings.last.date.month;
+      // Group by year and month to only include real checkups that occurred
+      final Map<String, MonthlyHealthData> monthMap = {};
+      for (final s in parsedScreenings) {
+        final key = '${s.date.year}-${s.date.month}';
+        monthMap[key] = s; // Keep the latest screening in that month
       }
-
-      for (int m = 1; m <= endMonth; m++) {
-        // Find checkups in this month
-        final screeningsInMonth = parsedScreenings.where((s) => s.date.month == m).toList();
-
-        if (screeningsInMonth.isNotEmpty) {
-          // Take the latest screening in this month
-          monthlyList.add(screeningsInMonth.last);
-        } else {
-          // If no screening in this month, carry forward from the closest previous month in parsedScreenings
-          final priorScreenings = parsedScreenings.where((s) => s.date.month < m).toList();
-          if (priorScreenings.isNotEmpty) {
-            final lastPrior = priorScreenings.last;
-            monthlyList.add(MonthlyHealthData(
-              monthName: months[m - 1],
-              date: DateTime(2026, m, 15),
-              systolic: lastPrior.systolic,
-              diastolic: lastPrior.diastolic,
-              bloodSugar: lastPrior.bloodSugar,
-              cholesterol: lastPrior.cholesterol,
-              uricAcid: lastPrior.uricAcid,
-              weight: lastPrior.weight,
-              updateDate: 'Tidak periksa',
-            ));
-          } else {
-            // If no prior screening, use the closest future screening in parsedScreenings
-            final futureScreenings = parsedScreenings.where((s) => s.date.month > m).toList();
-            if (futureScreenings.isNotEmpty) {
-              final firstFuture = futureScreenings.first;
-              monthlyList.add(MonthlyHealthData(
-                monthName: months[m - 1],
-                date: DateTime(2026, m, 15),
-                systolic: firstFuture.systolic,
-                diastolic: firstFuture.diastolic,
-                bloodSugar: firstFuture.bloodSugar,
-                cholesterol: firstFuture.cholesterol,
-                uricAcid: firstFuture.uricAcid,
-                weight: firstFuture.weight,
-                updateDate: 'Belum periksa',
-              ));
-            } else {
-              // Fallback default values
-              monthlyList.add(MonthlyHealthData(
-                monthName: months[m - 1],
-                date: DateTime(2026, m, 15),
-                systolic: 120,
-                diastolic: 80,
-                bloodSugar: 100,
-                cholesterol: 180,
-                uricAcid: 5.0,
-                weight: 60.0,
-                updateDate: '-',
-              ));
-            }
-          }
-        }
-      }
+      monthlyList.addAll(monthMap.values);
+      monthlyList.sort((a, b) => a.date.compareTo(b.date));
 
       setState(() {
         _allMonthlyData.clear();
         _allMonthlyData.addAll(monthlyList);
         if (_allMonthlyData.isNotEmpty) {
-          _startMonthIndex = 0; // Januari 2026
-          _endMonthIndex = _allMonthlyData.length - 1; // latest checked month
+          _startMonthIndex = 0;
+          _endMonthIndex = _allMonthlyData.length - 1;
           _filteredData = _allMonthlyData.sublist(_startMonthIndex, _endMonthIndex + 1);
         } else {
           _startMonthIndex = 0;
@@ -227,7 +171,13 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     if (_allMonthlyData.isEmpty) return '-';
     final start = _allMonthlyData[_startMonthIndex];
     final end = _allMonthlyData[_endMonthIndex];
-    return '${start.monthName} 2026 - ${end.monthName} 2026';
+    if (_startMonthIndex == _endMonthIndex) {
+      return '${start.monthName} ${start.date.year}';
+    }
+    if (start.date.year == end.date.year) {
+      return '${start.monthName} – ${end.monthName} ${start.date.year}';
+    }
+    return '${start.monthName} ${start.date.year} – ${end.monthName} ${end.date.year}';
   }
 
   // Calculate averages for statistics
@@ -256,7 +206,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     return last - first;
   }
 
-  // Ubah Periode Bottom Sheet Modal (Premium Custom Month Range Selection)
+  // Ubah Periode Bottom Sheet Modal (Clean Minimalist Selection, Zero Glow)
   void _showPeriodBottomSheet() {
     int tempStart = _startMonthIndex;
     int tempEnd = _endMonthIndex;
@@ -272,16 +222,15 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               decoration: const BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(24.0)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color.fromRGBO(0, 0, 0, 0.08),
-                    blurRadius: 24,
-                    offset: Offset(0, -4),
+                border: Border(
+                  top: BorderSide(
+                    color: AppColors.borderSubtle,
+                    width: 1.0,
                   ),
-                ],
+                ),
               ),
               padding: EdgeInsets.only(
-                top: 8.0,
+                top: 12.0,
                 left: 20.0,
                 right: 20.0,
                 bottom: 24.0 + MediaQuery.of(context).padding.bottom,
@@ -290,37 +239,56 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Pull indicator
+                  // Clean pull handle
                   Center(
                     child: Container(
-                      width: 48,
-                      height: 5,
-                      margin: const EdgeInsets.only(bottom: 16.0),
+                      width: 44,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 20.0),
                       decoration: BoxDecoration(
-                        color: AppColors.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(10.0),
+                        color: AppColors.borderSubtle,
+                        borderRadius: BorderRadius.circular(999),
                       ),
                     ),
                   ),
 
-                  // Header
+                  // Header (Clean, no redundant close button)
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Ubah Periode Tren',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.onSurface,
+                      Container(
+                        padding: const EdgeInsets.all(10.0),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12.0),
+                        ),
+                        child: const Icon(
+                          Icons.date_range_rounded,
+                          color: AppColors.primary,
+                          size: 20,
                         ),
                       ),
-                      _SpringButton(
-                        onTap: () => Navigator.pop(context),
-                        child: const Icon(
-                          Icons.close_rounded,
-                          color: AppColors.textSecondary,
-                          size: 24,
+                      const SizedBox(width: 12.0),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Pilih Periode Analisis',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: 2.0),
+                            Text(
+                              'Tentukan rentang bulan pemeriksaan',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -332,11 +300,11 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                     'Bulan Mulai',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                       color: AppColors.onSurface,
                     ),
                   ),
-                  const SizedBox(height: 8.0),
+                  const SizedBox(height: 10.0),
                   Wrap(
                     spacing: 8.0,
                     runSpacing: 8.0,
@@ -350,7 +318,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                           item.monthName,
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                             color: isSelected ? Colors.white : AppColors.onSurfaceVariant,
                           ),
                         ),
@@ -358,6 +326,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                         selectedColor: AppColors.primary,
                         disabledColor: AppColors.surfaceContainerLow,
                         backgroundColor: AppColors.surfaceContainerLow,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10.0),
+                          side: BorderSide(
+                            color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                            width: 1.0,
+                          ),
+                        ),
+                        showCheckmark: false,
                         onSelected: isPastEnd
                             ? null
                             : (selected) {
@@ -376,11 +352,11 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                     'Bulan Selesai',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                       color: AppColors.onSurface,
                     ),
                   ),
-                  const SizedBox(height: 8.0),
+                  const SizedBox(height: 10.0),
                   Wrap(
                     spacing: 8.0,
                     runSpacing: 8.0,
@@ -394,7 +370,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                           item.monthName,
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                             color: isSelected ? Colors.white : AppColors.onSurfaceVariant,
                           ),
                         ),
@@ -402,6 +378,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                         selectedColor: AppColors.primary,
                         backgroundColor: AppColors.surfaceContainerLow,
                         disabledColor: AppColors.surfaceContainerLow,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10.0),
+                          side: BorderSide(
+                            color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                            width: 1.0,
+                          ),
+                        ),
+                        showCheckmark: false,
                         onSelected: isBeforeStart
                             ? null
                             : (selected) {
@@ -414,42 +398,74 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                       );
                     }),
                   ),
-                  const SizedBox(height: 32.0),
+                  const SizedBox(height: 28.0),
 
-                  // Actions
-                  _SpringButton(
-                    onTap: () {
-                      setState(() {
-                        _startMonthIndex = tempStart;
-                        _endMonthIndex = tempEnd;
-                        _applyFilter();
-                      });
-                      Navigator.pop(context);
-                    },
-                    child: Container(
-                      width: double.infinity,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(14.0),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.25),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
+                  // Actions (Squircle, Zero Glow)
+                  Row(
+                    children: [
+                      // Reset button
+                      Expanded(
+                        child: _SpringButton(
+                          onTap: () {
+                            setModalState(() {
+                              tempStart = 0;
+                              tempEnd = _allMonthlyData.length - 1;
+                            });
+                          },
+                          child: Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceContainerLow,
+                              borderRadius: BorderRadius.circular(14.0),
+                              border: Border.all(
+                                color: AppColors.borderSubtle,
+                                width: 1.0,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              'Semua Bulan',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.onSurfaceVariant,
+                              ),
+                            ),
                           ),
-                        ],
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        'Terapkan Periode',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
                         ),
                       ),
-                    ),
+                      const SizedBox(width: 12.0),
+                      // Apply button
+                      Expanded(
+                        flex: 2,
+                        child: _SpringButton(
+                          onTap: () {
+                            setState(() {
+                              _startMonthIndex = tempStart;
+                              _endMonthIndex = tempEnd;
+                              _applyFilter();
+                            });
+                            Navigator.pop(context);
+                          },
+                          child: Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              borderRadius: BorderRadius.circular(14.0),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              'Terapkan Periode',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -479,7 +495,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               : SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
                   padding: EdgeInsets.only(
-                    top: 20.0,
+                    top: 16.0,
                     left: 20.0,
                     right: 20.0,
                     bottom: 24.0 + MediaQuery.of(context).padding.bottom,
@@ -489,23 +505,23 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                     children: [
                       // Filter Indicator Row
                       _buildFilterIndicatorRow(),
-                      const SizedBox(height: 20.0),
+                      const SizedBox(height: 16.0),
 
                       // Patient profile summary card
                       _buildPatientProfileCard(),
-                      const SizedBox(height: 24.0),
+                      const SizedBox(height: 16.0),
 
                       // Blood Pressure Trend Card
                       _buildBloodPressureCard(),
-                      const SizedBox(height: 24.0),
+                      const SizedBox(height: 16.0),
 
                       // Blood Sugar & Cholesterol Card
                       _buildBloodSugarCholesterolCard(),
-                      const SizedBox(height: 24.0),
+                      const SizedBox(height: 16.0),
 
                       // Uric Acid Card
                       _buildUricAcidCard(),
-                      const SizedBox(height: 24.0),
+                      const SizedBox(height: 16.0),
 
                       // Weight Trend Card
                       _buildWeightTrendCard(),
@@ -521,9 +537,9 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
       margin: const EdgeInsets.all(24.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
       ),
@@ -535,12 +551,12 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
             padding: const EdgeInsets.all(16.0),
             decoration: BoxDecoration(
               color: AppColors.primary.withValues(alpha: 0.08),
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(16.0),
             ),
             child: const Icon(
               Icons.search_off_rounded,
               color: AppColors.primary,
-              size: 40,
+              size: 36,
             ),
           ),
           const SizedBox(height: 16.0),
@@ -566,15 +582,15 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
           _SpringButton(
             onTap: () => Navigator.pop(context),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
               decoration: BoxDecoration(
                 color: AppColors.primary,
-                borderRadius: BorderRadius.circular(999),
+                borderRadius: BorderRadius.circular(14.0),
               ),
               child: Text(
                 'Kembali',
                 style: GoogleFonts.plusJakartaSans(
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: FontWeight.bold,
                   color: Colors.white,
                 ),
@@ -586,14 +602,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Top App Bar
+  // Top App Bar with standard squircle back button
   Widget _buildAppBar(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         border: Border(
           bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
+            color: AppColors.borderSubtle,
             width: 1.0,
           ),
         ),
@@ -601,7 +617,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
       child: SafeArea(
         child: Container(
           height: 64.0,
-          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -610,28 +626,34 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 child: Container(
                   width: 40,
                   height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
+                  ),
                   alignment: Alignment.center,
                   child: const Icon(
-                    Icons.arrow_back_ios_rounded,
-                    color: AppColors.primary,
-                    size: 24.0,
+                    Icons.arrow_back_rounded,
+                    color: AppColors.onSurface,
+                    size: 20.0,
                   ),
                 ),
               ),
-              Expanded(
-                child: Text(
-                  'Tren Kesehatan',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
+              Text(
+                'Tren Kesehatan',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.onSurface,
                 ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
-              const SizedBox(width: 40.0), // Spacer for centering
+              const SizedBox(width: 40.0), // Spacer for perfect centering
             ],
           ),
         ),
@@ -639,109 +661,129 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Filter Indicator Row
+  // Filter Indicator Row (Clean Bento Filter Bar)
   Widget _buildFilterIndicatorRow() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8.0),
             decoration: BoxDecoration(
               color: AppColors.primary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(999),
+              borderRadius: BorderRadius.circular(10.0),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.event_note_rounded,
-                  color: AppColors.primary,
-                  size: 16.0,
-                ),
-                const SizedBox(width: 6.0),
-                Expanded(
-                  child: Text(
-                    _getPeriodDisplayString(),
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                ),
-              ],
+            child: const Icon(
+              Icons.calendar_month_rounded,
+              color: AppColors.primary,
+              size: 16.0,
             ),
           ),
-        ),
-        const SizedBox(width: 8.0),
-        _SpringButton(
-          onTap: _showPeriodBottomSheet,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
-            child: Row(
+          const SizedBox(width: 12.0),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Ubah Periode',
+                  'Rentang Analisis',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
+                    fontSize: 11.0,
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(width: 2.0),
-                const Icon(
-                  Icons.expand_more_rounded,
-                  color: AppColors.primary,
-                  size: 18.0,
+                const SizedBox(height: 2.0),
+                Text(
+                  _getPeriodDisplayString(),
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13.0,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.onSurface,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ],
             ),
           ),
-        ),
-      ],
+          const SizedBox(width: 8.0),
+          _SpringButton(
+            onTap: _showPeriodBottomSheet,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 7.0),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(10.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Ubah',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 12.0,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 3.0),
+                  const Icon(
+                    Icons.tune_rounded,
+                    color: AppColors.primary,
+                    size: 14.0,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  // Patient Profile Summary Card
+  // Patient Profile Summary Card (Clean Bento Card, Zero Glow)
   Widget _buildPatientProfileCard() {
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(20.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(18.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
       ),
       child: Row(
         children: [
-          // Avatar
+          // Squircle Avatar
           Container(
-            width: 56,
-            height: 56,
+            width: 50,
+            height: 50,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(14.0),
               color: widget.gender == 'Laki-laki' 
-                  ? const Color(0x1BBA5855) 
-                  : AppColors.secondaryContainer,
+                  ? AppColors.primary.withValues(alpha: 0.08) 
+                  : AppColors.secondaryContainer.withValues(alpha: 0.5),
               border: Border.all(
-                color: AppColors.primaryFixed,
-                width: 2.0,
+                color: AppColors.borderSubtle,
+                width: 1.0,
               ),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28.0),
-              child: _buildInitialsAvatar(),
-            ),
+            child: _buildInitialsAvatar(),
           ),
-          const SizedBox(width: 16.0),
+          const SizedBox(width: 14.0),
 
           // Details
           Expanded(
@@ -751,65 +793,94 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 Text(
                   widget.name,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
                     color: AppColors.onSurface,
                   ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
-                const SizedBox(height: 4.0),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(6.0),
-                  ),
-                  child: Text(
-                    '${widget.age} Tahun',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.onSurfaceVariant,
+                const SizedBox(height: 6.0),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(6.0),
+                        border: Border.all(
+                          color: AppColors.borderSubtle,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Text(
+                        '${widget.age} Thn',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 6.0),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(6.0),
+                        border: Border.all(
+                          color: AppColors.borderSubtle,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Text(
+                        widget.gender,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
 
-          // Status Control
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                'Status',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  color: AppColors.textSecondary,
+          // Status Badge
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8.0),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.2),
+                width: 0.8,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: AppColors.primary,
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2.0),
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                    ),
+                const SizedBox(width: 6.0),
+                Text(
+                  'Terkontrol',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary,
                   ),
-                  const SizedBox(width: 6.0),
-                  Text(
-                    'Terkontrol',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -824,7 +895,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
       child: Text(
         initials,
         style: GoogleFonts.plusJakartaSans(
-          fontSize: 20,
+          fontSize: 18,
           fontWeight: FontWeight.bold,
           color: widget.gender == 'Laki-laki' 
               ? AppColors.tertiary 
@@ -834,7 +905,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Blood Pressure Trend Card
+  // Blood Pressure Trend Card (Zero Glow, Zero Gradient)
   Widget _buildBloodPressureCard() {
     final systolicPoints = _filteredData.map((e) => e.systolic).toList();
     final diastolicPoints = _filteredData.map((e) => e.diastolic).toList();
@@ -861,21 +932,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(18.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -885,52 +949,64 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Tren Tekanan Darah',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.onSurface,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10.0),
                     ),
-                    const SizedBox(height: 2.0),
-                    Text(
-                      'Satuan: mmHg',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+                    child: const Icon(
+                      Icons.favorite_rounded,
+                      color: AppColors.primary,
+                      size: 18.0,
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 10.0),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tekanan Darah',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Satuan: mmHg',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
+              // Legend
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Row(
                     children: [
                       Container(
-                        width: 10,
-                        height: 10,
+                        width: 8,
+                        height: 8,
                         decoration: const BoxDecoration(
                           color: AppColors.tertiary,
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 6.0),
+                      const SizedBox(width: 5.0),
                       Text(
                         'Sistolik',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                           color: AppColors.onSurfaceVariant,
                         ),
                       ),
@@ -940,19 +1016,19 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                   Row(
                     children: [
                       Container(
-                        width: 10,
-                        height: 10,
+                        width: 8,
+                        height: 8,
                         decoration: const BoxDecoration(
                           color: AppColors.primary,
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 6.0),
+                      const SizedBox(width: 5.0),
                       Text(
                         'Diastolik',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                           color: AppColors.onSurfaceVariant,
                         ),
                       ),
@@ -962,9 +1038,9 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 24.0),
+          const SizedBox(height: 20.0),
 
-          // Custom Curves Chart Graphic
+          // Custom Curves Chart Graphic (Zero Gradient, Clean Strokes)
           SizedBox(
             height: 160,
             child: TweenAnimationBuilder<double>(
@@ -986,17 +1062,21 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               },
             ),
           ),
-          const SizedBox(height: 20.0),
+          const SizedBox(height: 18.0),
 
           // Bottom Stats Boxes (2 Columns)
           Row(
             children: [
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12.0),
+                  padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 10.0),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(16.0),
+                    borderRadius: BorderRadius.circular(14.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
                   ),
                   child: Column(
                     children: [
@@ -1005,14 +1085,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
                           color: AppColors.textSecondary,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 4.0),
                       Text(
                         avgSys,
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 22,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                           color: AppColors.onSurface,
                         ),
@@ -1021,13 +1101,17 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12.0),
+              const SizedBox(width: 10.0),
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12.0),
+                  padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 10.0),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(16.0),
+                    borderRadius: BorderRadius.circular(14.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
                   ),
                   child: Column(
                     children: [
@@ -1036,14 +1120,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
                           color: AppColors.textSecondary,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 4.0),
                       Text(
                         avgDia,
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 22,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                           color: AppColors.onSurface,
                         ),
@@ -1059,60 +1143,72 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Blood Sugar & Cholesterol Progress Bar Indicator Card
+  // Blood Sugar & Cholesterol Progress Bar Indicator Card (Zero Glow)
   Widget _buildBloodSugarCholesterolCard() {
-    // We use the latest month's records for this section
     final latestRecord = _filteredData.last;
 
-    // Persentase fills (Gula darah range 0-200+, Kolesterol range 0-300+)
     final sugarPercentage = (latestRecord.bloodSugar / 200.0).clamp(0.0, 1.0);
     final cholPercentage = (latestRecord.cholesterol / 300.0).clamp(0.0, 1.0);
 
-    // Dynamic warning status text
     final sugarStatus = latestRecord.bloodSugar < 140 ? 'Stabil' : 'Tinggi';
     final cholStatus = latestRecord.cholesterol < 200 ? 'Normal' : 'Waspada';
     final cholColor = latestRecord.cholesterol < 200 ? AppColors.primary : AppColors.statusWarning;
 
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(18.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Header
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Gula Darah & Kolesterol',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.onSurface,
+              Container(
+                padding: const EdgeInsets.all(8.0),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10.0),
+                ),
+                child: const Icon(
+                  Icons.bloodtype_outlined,
+                  color: AppColors.primary,
+                  size: 18.0,
                 ),
               ),
-              Icon(
-                Icons.analytics_outlined,
-                color: AppColors.onSurfaceVariant.withValues(alpha: 0.7),
-                size: 20,
+              const SizedBox(width: 10.0),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Gula Darah & Kolesterol',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2.0),
+                    Text(
+                      'Pemeriksaan Terakhir: ${latestRecord.updateDate}',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 24.0),
+          const SizedBox(height: 22.0),
 
           // Blood Sugar Horizontal Bar
           Column(
@@ -1122,7 +1218,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Gula Darah (mg/dL)',
+                    'Gula Darah Sewaktu',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -1140,7 +1236,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 ],
               ),
               const SizedBox(height: 8.0),
-              // Animated progress bar
+              // Animated progress bar (flat solid fill, zero glow)
               TweenAnimationBuilder<double>(
                 key: ValueKey(sugarPercentage),
                 tween: Tween<double>(begin: 0.0, end: sugarPercentage),
@@ -1148,10 +1244,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 curve: Curves.easeOut,
                 builder: (context, val, child) {
                   return Container(
-                    height: 8,
+                    height: 7,
                     decoration: BoxDecoration(
-                      color: AppColors.surfaceContainer,
+                      color: AppColors.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: AppColors.borderSubtle,
+                        width: 0.8,
+                      ),
                     ),
                     alignment: Alignment.centerLeft,
                     child: FractionallySizedBox(
@@ -1170,18 +1270,25 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    sugarStatus,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.primary,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(4.0),
+                    ),
+                    child: Text(
+                      sugarStatus,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                      ),
                     ),
                   ),
                   Text(
-                    'Update: ${latestRecord.updateDate}',
+                    'Nilai Normal: < 140 mg/dL',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
+                      fontSize: 10,
                       color: AppColors.textSecondary,
                     ),
                   ),
@@ -1189,7 +1296,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 20.0),
+          const SizedBox(height: 18.0),
 
           // Cholesterol Horizontal Bar
           Column(
@@ -1199,7 +1306,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Kolesterol (mg/dL)',
+                    'Kolesterol Total',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -1225,10 +1332,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                 curve: Curves.easeOut,
                 builder: (context, val, child) {
                   return Container(
-                    height: 8,
+                    height: 7,
                     decoration: BoxDecoration(
-                      color: AppColors.surfaceContainer,
+                      color: AppColors.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: AppColors.borderSubtle,
+                        width: 0.8,
+                      ),
                     ),
                     alignment: Alignment.centerLeft,
                     child: FractionallySizedBox(
@@ -1247,18 +1358,25 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    cholStatus,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: cholColor,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+                    decoration: BoxDecoration(
+                      color: cholColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(4.0),
+                    ),
+                    child: Text(
+                      cholStatus,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: cholColor,
+                      ),
                     ),
                   ),
                   Text(
-                    'Update: ${latestRecord.updateDate}',
+                    'Nilai Normal: < 200 mg/dL',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
+                      fontSize: 10,
                       color: AppColors.textSecondary,
                     ),
                   ),
@@ -1271,7 +1389,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Uric Acid Line Curve Card
+  // Uric Acid Line Curve Card (Zero Glow, Zero Gradient)
   Widget _buildUricAcidCard() {
     final uricAcidPoints = _filteredData.map((e) => e.uricAcid).toList();
     final monthLabels = _filteredData.map((e) => e.monthName.substring(0, 3)).toList();
@@ -1291,21 +1409,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(18.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1314,49 +1425,60 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Tren Asam Urat',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.onSurface,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10.0),
                     ),
-                    const SizedBox(height: 2.0),
-                    Text(
-                      'Satuan: mg/dL',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+                    child: const Icon(
+                      Icons.science_outlined,
+                      color: AppColors.primary,
+                      size: 18.0,
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 10.0),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tren Asam Urat',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Satuan: mg/dL',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
               Row(
                 children: [
                   Container(
-                    width: 10,
-                    height: 10,
+                    width: 8,
+                    height: 8,
                     decoration: const BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(width: 6.0),
+                  const SizedBox(width: 5.0),
                   Text(
                     'Asam Urat',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 11,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w600,
                       color: AppColors.onSurfaceVariant,
                     ),
                   ),
@@ -1364,9 +1486,9 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 24.0),
+          const SizedBox(height: 20.0),
 
-          // Custom Uric Acid Graph Painter
+          // Custom Uric Acid Graph Painter (Zero Gradient)
           SizedBox(
             height: 160,
             child: TweenAnimationBuilder<double>(
@@ -1387,14 +1509,18 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               },
             ),
           ),
-          const SizedBox(height: 20.0),
+          const SizedBox(height: 18.0),
 
           // Average Box
           Container(
             padding: const EdgeInsets.symmetric(vertical: 12.0),
             decoration: BoxDecoration(
               color: AppColors.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(16.0),
+              borderRadius: BorderRadius.circular(14.0),
+              border: Border.all(
+                color: AppColors.borderSubtle,
+                width: 1.0,
+              ),
             ),
             child: Column(
               children: [
@@ -1403,14 +1529,14 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 11,
                     color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4.0),
                 Text(
-                  avgUric,
+                  '$avgUric mg/dL',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: AppColors.onSurface,
                   ),
@@ -1423,7 +1549,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     );
   }
 
-  // Weight Trend Vertical Bar Chart Card
+  // Weight Trend Vertical Bar Chart Card (Zero Glow)
   Widget _buildWeightTrendCard() {
     final latestWeight = _filteredData.last.weight;
     final changeVal = _calculateWeightChange();
@@ -1443,39 +1569,102 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(18.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Title
-          Text(
-            'Tren Berat Badan',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.onSurface,
-            ),
+          // Title Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10.0),
+                    ),
+                    child: const Icon(
+                      Icons.monitor_weight_outlined,
+                      color: AppColors.primary,
+                      size: 18.0,
+                    ),
+                  ),
+                  const SizedBox(width: 10.0),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tren Berat Badan',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Satuan: kg',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              // Change badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                decoration: BoxDecoration(
+                  color: isDown
+                      ? AppColors.primaryContainer.withValues(alpha: 0.1)
+                      : AppColors.statusWarning.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8.0),
+                  border: Border.all(
+                    color: isDown
+                        ? AppColors.primary.withValues(alpha: 0.2)
+                        : AppColors.statusWarning.withValues(alpha: 0.2),
+                    width: 0.8,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isDown ? Icons.trending_down_rounded : Icons.trending_up_rounded,
+                      size: 14,
+                      color: isDown ? AppColors.primary : AppColors.statusWarning,
+                    ),
+                    const SizedBox(width: 4.0),
+                    Text(
+                      _filteredData.length < 2 ? 'Catatan Awal' : '${changeVal >= 0 ? "+" : ""}${changeVal.toStringAsFixed(1)} kg',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: isDown ? AppColors.primary : AppColors.statusWarning,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 28.0),
+          const SizedBox(height: 24.0),
 
           // Vertical Bars Layout
           SizedBox(
-            height: 128,
+            height: 120,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -1510,11 +1699,11 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                                   ),
                                   const SizedBox(height: 4.0),
                                   Container(
-                                    height: 70 * scale,
-                                    width: 24,
+                                    height: 65 * scale,
+                                    width: 22,
                                     decoration: BoxDecoration(
                                       color: isLast ? AppColors.primary : AppColors.primaryFixed,
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(8.0)),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6.0)),
                                     ),
                                   ),
                                 ],
@@ -1529,7 +1718,7 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
                           color: AppColors.textSecondary,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
@@ -1538,91 +1727,30 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
               }),
             ),
           ),
-          const SizedBox(height: 20.0),
+          const SizedBox(height: 18.0),
 
           // Divider
           const Divider(color: AppColors.borderSubtle, height: 1.0),
-          const SizedBox(height: 16.0),
+          const SizedBox(height: 14.0),
 
           // Weight Stats Row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8.0),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryContainer.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(12.0),
-                      ),
-                      child: const Icon(
-                        Icons.monitor_weight_rounded,
-                        color: AppColors.primary,
-                        size: 22,
-                      ),
-                    ),
-                    const SizedBox(width: 12.0),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Terakhir',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11,
-                              color: AppColors.textSecondary,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                          ),
-                          const SizedBox(height: 2.0),
-                          Text(
-                            '${latestWeight.toStringAsFixed(1)} kg',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.onSurface,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+              Text(
+                'Berat Terakhir Tercatat',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-              const SizedBox(width: 8.0),
-
-              // Change badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
-                decoration: BoxDecoration(
-                  color: isDown
-                      ? AppColors.primaryContainer.withValues(alpha: 0.1)
-                      : AppColors.statusWarning.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      isDown ? Icons.trending_down_rounded : Icons.trending_up_rounded,
-                      size: 16,
-                      color: isDown ? AppColors.primary : AppColors.statusWarning,
-                    ),
-                    const SizedBox(width: 4.0),
-                    Text(
-                      '${changeVal >= 0 ? "+" : ""}${changeVal.toStringAsFixed(1)}kg',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: isDown ? AppColors.primary : AppColors.statusWarning,
-                      ),
-                    ),
-                  ],
+              Text(
+                '${latestWeight.toStringAsFixed(1)} kg',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.onSurface,
                 ),
               ),
             ],
@@ -1631,11 +1759,9 @@ class _TrenKesehatanScreenState extends State<TrenKesehatanScreen> {
       ),
     );
   }
-
-
 }
 
-// Reusable premium iOS spring animation button
+// Reusable spring animation button
 class _SpringButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
@@ -1692,7 +1818,7 @@ class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderS
   }
 }
 
-// Custom Painter for Premium Curved Line Chart with horizontal grid lines and gradient fills
+// Custom Painter for Clean Minimalist Curved Line Chart (Strictly ZERO GLOW, ZERO GRADIENT)
 class CurveChartPainter extends CustomPainter {
   final List<double> systolicPoints;
   final List<double>? diastolicPoints;
@@ -1722,7 +1848,7 @@ class CurveChartPainter extends CustomPainter {
 
     // Draw Grid Lines and Y Axis Labels
     final gridPaint = Paint()
-      ..color = AppColors.onSurface.withValues(alpha: 0.08)
+      ..color = AppColors.borderSubtle.withValues(alpha: 0.8)
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
@@ -1783,59 +1909,50 @@ class CurveChartPainter extends CustomPainter {
     final sysCoords = getScreenCoords(systolicPoints);
     final diaCoords = diastolicPoints != null ? getScreenCoords(diastolicPoints!) : null;
 
-    // Helper to paint line curve and gradient fill
+    // Helper to paint line curve and subtle flat solid fill (NO GRADIENT)
     void paintLineCurve(List<Offset> coords, List<double> originalData, Color color, {bool isDiastolic = false}) {
       if (coords.isEmpty) return;
 
-      final curvePath = Path();
-      curvePath.moveTo(coords.first.dx, coords.first.dy);
+      if (coords.length > 1) {
+        final curvePath = Path();
+        curvePath.moveTo(coords.first.dx, coords.first.dy);
 
-      if (coords.length == 1) {
-        curvePath.lineTo(leftPadding + chartWidth, coords.first.dy);
-      } else {
-        // Generate beautiful cubic bezier curves
+        // Generate smooth cubic bezier curves
         for (int i = 0; i < coords.length - 1; i++) {
           final p0 = coords[i];
           final p1 = coords[i + 1];
           final controlX = p0.dx + (p1.dx - p0.dx) / 2;
           curvePath.cubicTo(controlX, p0.dy, controlX, p1.dy, p1.dx, p1.dy);
         }
+
+        // Draw subtle flat solid fill beneath curve (ZERO GRADIENT)
+        final fillPath = Path.from(curvePath);
+        fillPath.lineTo(coords.last.dx, topPadding + chartHeight);
+        fillPath.lineTo(coords.first.dx, topPadding + chartHeight);
+        fillPath.close();
+
+        final fillPaint = Paint()
+          ..color = color.withValues(alpha: 0.04)
+          ..style = PaintingStyle.fill;
+
+        canvas.drawPath(fillPath, fillPaint);
+
+        // Draw Main Stroke Path
+        final strokePaint = Paint()
+          ..color = color
+          ..strokeWidth = 2.5
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+
+        canvas.drawPath(curvePath, strokePaint);
       }
 
-      // Draw Gradient Fill beneath curve (filling down to bottom of the chart area, i.e., topPadding + chartHeight)
-      final fillPath = Path.from(curvePath);
-      fillPath.lineTo(coords.last.dx, topPadding + chartHeight);
-      fillPath.lineTo(coords.first.dx, topPadding + chartHeight);
-      fillPath.close();
-
-      final fillPaint = Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            color.withValues(alpha: 0.16),
-            color.withValues(alpha: 0.00),
-          ],
-        ).createShader(Rect.fromLTWH(leftPadding, topPadding, chartWidth, chartHeight))
-        ..style = PaintingStyle.fill;
-
-      canvas.drawPath(fillPath, fillPaint);
-
-      // Draw Main Stroke Path
-      final strokePaint = Paint()
-        ..color = color
-        ..strokeWidth = 3.0
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
-
-      canvas.drawPath(curvePath, strokePaint);
-
-      // Draw circles and values at data point vertices
-      final dotStrokePaint = Paint()
+      // Draw solid vertex points (no glow)
+      final dotInnerPaint = Paint()
         ..color = Colors.white
         ..style = PaintingStyle.fill;
 
-      final dotFillPaint = Paint()
+      final dotOuterPaint = Paint()
         ..color = color
         ..style = PaintingStyle.fill;
 
@@ -1843,8 +1960,8 @@ class CurveChartPainter extends CustomPainter {
         final pt = coords[i];
         final val = originalData[i];
 
-        canvas.drawCircle(pt, 5.0, dotFillPaint);
-        canvas.drawCircle(pt, 2.5, dotStrokePaint);
+        canvas.drawCircle(pt, 4.5, dotOuterPaint);
+        canvas.drawCircle(pt, 2.0, dotInnerPaint);
 
         // Draw value label text
         final textPainter = TextPainter(
@@ -1860,8 +1977,7 @@ class CurveChartPainter extends CustomPainter {
         );
         textPainter.layout();
 
-        // If diastolic, offset downwards; systolic, offset upwards
-        final double yOffset = isDiastolic ? 8.0 : -20.0;
+        final double yOffset = isDiastolic ? 8.0 : -18.0;
         textPainter.paint(
           canvas,
           Offset(pt.dx - textPainter.width / 2, pt.dy + yOffset),
