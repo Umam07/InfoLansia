@@ -7,6 +7,11 @@ import 'skrining_screen.dart';
 import 'pasien_screen.dart';
 import 'profil_screen.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/app_pull_to_refresh.dart';
+import '../widgets/sync_status_banner.dart';
+import '../database/app_database.dart';
+import '../services/sync_service.dart';
+import '../services/network_connectivity_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -18,70 +23,115 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _currentIndex = 0;
   late final PageController _pageController;
-  int _totalPatientsCount = 0;
-  int _screenedPatientsCount = 0;
-  int _screenedTodayCount = 0;
-  int _targetTodayCount = 0;
-  bool _isLoadingStats = true;
+
+  // Static cache so data persists in memory across tab switches and rebuilds
+  static int _cachedTotalPatients = 0;
+  static int _cachedScreenedPatients = 0;
+  static bool _hasLoadedOnce = false;
+
+  int _totalPatientsCount = _cachedTotalPatients;
+  int _screenedPatientsCount = _cachedScreenedPatients;
+  bool _isLoadingStats = !_hasLoadedOnce;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
-    _fetchStats();
+    SyncService.instance.refreshUnsyncedCount();
+    if (_hasLoadedOnce) {
+      // Data sudah ada di cache: perbarui hening di latar belakang
+      _fetchStats(silent: true);
+    } else {
+      // Pertama kali dibuka: muat data pertama
+      _fetchStats(silent: false);
+    }
   }
 
-  Future<void> _fetchStats() async {
+
+  Future<void> _fetchStats({bool silent = false}) async {
     if (!mounted) return;
-    setState(() {
-      _isLoadingStats = true;
-    });
+    if (!silent) {
+      setState(() {
+        _isLoadingStats = true;
+      });
+    }
     try {
-      final patientsResponse = await Supabase.instance.client
-          .from('patients')
-          .select('id');
-      
-      final totalPatients = patientsResponse.length;
+      // 1. Cek data lokal terlebih dahulu untuk render instan (Zero lag)
+      final localPatients = await AppDatabase.instance.getAllPatients();
+      final localScreenings = await AppDatabase.instance.getAllScreenings();
+      if (localPatients.isNotEmpty || localScreenings.isNotEmpty) {
+        final now = DateTime.now();
+        final startOfMonth = DateTime(now.year, now.month, 1);
+        final screenedThisMonth = localScreenings
+            .where((s) {
+              try {
+                final d = DateTime.parse(s.date);
+                return d.isAfter(startOfMonth) ||
+                    (d.year == now.year && d.month == now.month);
+              } catch (_) {
+                return false;
+              }
+            })
+            .map((s) => s.patientId)
+            .toSet();
 
-      final now = DateTime.now();
-      final startOfMonth = DateTime(now.year, now.month, 1).toIso8601String().split('T').first;
-      final todayStr = now.toIso8601String().split('T').first;
-      
-      final screeningsResponse = await Supabase.instance.client
-          .from('screenings')
-          .select('patient_id, date')
-          .gte('date', startOfMonth);
+        _cachedTotalPatients = localPatients.length;
+        _cachedScreenedPatients = screenedThisMonth.length;
+        _hasLoadedOnce = true;
 
-      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningsResponse);
+        if (mounted) {
+          setState(() {
+            _totalPatientsCount = localPatients.length;
+            _screenedPatientsCount = screenedThisMonth.length;
+            _isLoadingStats = false;
+          });
+        }
+      }
 
-      final uniqueScreenedIds = screenings
-          .map((s) => s['patient_id'] as String)
-          .toSet();
+      // 2. Jika online, ambil data segar dari Supabase
+      if (NetworkConnectivityService.instance.isOnline.value) {
+        final now = DateTime.now();
+        final startOfMonth =
+            DateTime(now.year, now.month, 1).toIso8601String().split('T').first;
 
-      final screenedCount = uniqueScreenedIds.length;
+        final results = await Future.wait([
+          Supabase.instance.client.from('patients').select('id'),
+          Supabase.instance.client
+              .from('screenings')
+              .select('patient_id, date')
+              .gte('date', startOfMonth),
+        ]);
 
-      // Calculate screened today (unique patients screened today)
-      final uniqueScreenedTodayIds = screenings
-          .where((s) => (s['date'] as String).startsWith(todayStr))
-          .map((s) => s['patient_id'] as String)
-          .toSet();
+        final patientsResponse = results[0] as List;
+        final screeningsResponse = results[1] as List;
 
-      final screenedTodayCount = uniqueScreenedTodayIds.length;
+        final totalPatients = patientsResponse.length;
+        final List<Map<String, dynamic>> screenings =
+            List<Map<String, dynamic>>.from(screeningsResponse);
 
-      // Remaining is patients not screened this month
-      final remaining = (totalPatients - screenedCount).clamp(0, totalPatients);
+        final uniqueScreenedIds =
+            screenings.map((s) => s['patient_id'] as String).toSet();
 
-      // Target today = screened today + remaining patients
-      final targetToday = screenedTodayCount + remaining;
+        final screenedCount = uniqueScreenedIds.length;
 
-      if (mounted) {
-        setState(() {
-          _totalPatientsCount = totalPatients;
-          _screenedPatientsCount = screenedCount;
-          _screenedTodayCount = screenedTodayCount;
-          _targetTodayCount = targetToday;
-          _isLoadingStats = false;
-        });
+        // Update static memory cache
+        _cachedTotalPatients = totalPatients;
+        _cachedScreenedPatients = screenedCount;
+        _hasLoadedOnce = true;
+
+        if (mounted) {
+          setState(() {
+            _totalPatientsCount = totalPatients;
+            _screenedPatientsCount = screenedCount;
+            _isLoadingStats = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _isLoadingStats = false;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -99,20 +149,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _navigateToPage(int index) {
-    if ((index - _currentIndex).abs() > 1) {
-      _pageController.jumpToPage(index > _currentIndex ? index - 1 : index + 1);
-    }
-    _pageController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-    );
+    if (index == _currentIndex) return;
+    _pageController.jumpToPage(index);
   }
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final isKeyboardOpen = bottomInset > 0;
+
     return Scaffold(
       backgroundColor: AppColors.backgroundAlt,
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // Switch between active screen content using a PageView
@@ -124,10 +172,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _currentIndex = index;
                 });
                 if (index == 0) {
-                  _fetchStats();
+                  _fetchStats(silent: true);
                 }
               },
-              physics: const BouncingScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
               children: [
                 _buildDashboardContent(),
                 const LayananScreen(),
@@ -138,12 +186,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
 
-          // Shared Bottom Navigation Bar
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomNavBar(),
+          // Shared Floating Bottom Navigation Bar (Telegram Style)
+          // Gracefully hides offscreen when software keyboard is active to eliminate UI jumping and keyboard lag
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            left: 14.0,
+            right: 14.0,
+            bottom: isKeyboardOpen
+                ? -100.0
+                : (MediaQuery.of(context).padding.bottom > 0
+                    ? MediaQuery.of(context).padding.bottom + 10.0
+                    : 18.0),
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              opacity: isKeyboardOpen ? 0.0 : 1.0,
+              child: IgnorePointer(
+                ignoring: isKeyboardOpen,
+                child: _buildBottomNavBar(),
+              ),
+            ),
           ),
         ],
       ),
@@ -154,14 +217,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Column(
       children: [
         _buildHeader(),
+        const SyncStatusBanner(),
         Expanded(
-          child: RefreshIndicator(
-            onRefresh: _fetchStats,
-            color: AppColors.primary,
-            backgroundColor: AppColors.surfaceContainerLowest,
+          child: AppPullToRefresh(
+            onRefresh: () async {
+              await SyncService.instance.syncAll();
+              await _fetchStats(silent: true);
+            },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(
-                parent: BouncingScrollPhysics(),
+                parent: ClampingScrollPhysics(),
               ),
               padding: const EdgeInsets.only(
                 left: 20.0,
@@ -172,13 +237,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildWelcomeSection(),
-                  const SizedBox(height: 32.0),
                   _buildRingkasanLayanan(),
                   const SizedBox(height: 32.0),
                   _buildAksesCepat(),
-                  const SizedBox(height: 32.0),
-                  _buildFeaturedCard(),
                 ],
               ),
             ),
@@ -188,21 +249,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Header Widget (TopAppBar style)
+
+  // Header Widget (Clean, Minimalist TopAppBar)
   Widget _buildHeader() {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
         border: Border(
           bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
+            color: AppColors.borderSubtle.withValues(alpha: 0.6),
             width: 1.0,
           ),
         ),
@@ -215,19 +270,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Container(
               height: 64.0,
               padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Row(
-                children: [
-                  // Title
-                  Text(
-                    'Posyandu Sakura',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primary,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                ],
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Beranda',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                  letterSpacing: -0.5,
+                ),
               ),
             ),
             if (_isLoadingStats)
@@ -244,70 +295,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Welcome Section
-  Widget _buildWelcomeSection() {
-    final user = Supabase.instance.client.auth.currentUser;
-    final displayName = user?.userMetadata?['full_name'] ?? 
-                        user?.userMetadata?['name'] ?? 
-                        user?.email?.split('@').first ?? 
-                        'Bidan SIU';
-
-    final hour = DateTime.now().hour;
-    String timeGreeting;
-    if (hour < 11) {
-      timeGreeting = 'Selamat pagi';
-    } else if (hour < 15) {
-      timeGreeting = 'Selamat siang';
-    } else if (hour < 18) {
-      timeGreeting = 'Selamat sore';
-    } else {
-      timeGreeting = 'Selamat malam';
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Halo, $displayName',
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: AppColors.onSurface,
-            letterSpacing: -0.3,
-          ),
-        ),
-        const SizedBox(height: 4.0),
-        Text(
-          '$timeGreeting, mari bantu lansia tetap sehat hari ini.',
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.normal,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ],
-    );
-  }
 
   // Ringkasan Layanan Bento Grid
   Widget _buildRingkasanLayanan() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Section Header
+        // Section Header (headline-md: 20px / 600)
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
               'Ringkasan Layanan',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: AppColors.onSurface,
-              ),
+              style: AppTypography.headlineMd(),
             ),
             _SpringButton(
-              onTap: () {},
+              onTap: () {
+                _navigateToPage(1);
+              },
               child: Text(
                 'Lihat Detail',
                 style: GoogleFonts.plusJakartaSans(
@@ -364,12 +369,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             width: 40,
                             height: 40,
                             decoration: BoxDecoration(
-                              color: AppColors.secondary.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
+                              color: const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(12.0),
                             ),
                             child: const Icon(
                               Icons.groups_rounded,
-                              color: AppColors.secondary,
+                              color: Color(0xFF00875A),
                               size: 20,
                             ),
                           ),
@@ -387,11 +392,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const SizedBox(height: 4.0),
                               Text(
                                 '$_totalPatientsCount',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w800,
+                                style: AppTypography.displayNumber(
                                   color: AppColors.onSurface,
-                                  height: 1.0,
                                 ),
                               ),
                             ],
@@ -424,8 +426,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             width: 40,
                             height: 40,
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
+                              color: Colors.white.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12.0),
                             ),
                             child: const Icon(
                               Icons.how_to_reg_rounded,
@@ -447,11 +449,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const SizedBox(height: 4.0),
                               Text(
                                 '$_screenedPatientsCount',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w800,
+                                style: AppTypography.displayNumber(
                                   color: Colors.white,
-                                  height: 1.0,
                                 ),
                               ),
                             ],
@@ -481,91 +480,107 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ],
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: AppColors.statusWarning.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(16.0),
-                              ),
-                              child: const Icon(
-                                Icons.pending_actions_rounded,
-                                color: AppColors.statusWarning,
-                                size: 24,
-                              ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.statusWarning.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(16.0),
+                                  ),
+                                  child: const Icon(
+                                    Icons.pending_actions_rounded,
+                                    color: AppColors.statusWarning,
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 16.0),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        'Tersisa',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
+                                      ),
+                                      const SizedBox(height: 2.0),
+                                      Text(
+                                        '$remaining Warga',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.onSurface,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 16.0),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          ),
+                          const SizedBox(width: 12.0),
+                          Row(
+                            children: [
+                              Container(
+                                width: 2.0,
+                                height: 40.0,
+                                color: AppColors.borderSubtle.withValues(alpha: 0.5),
+                              ),
+                              const SizedBox(width: 20.0),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Text(
-                                    'Tersisa',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                  ),
-                                  const SizedBox(height: 2.0),
-                                  Text(
-                                    '$remaining Warga',
+                                    '$percentage%',
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 20,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.onSurface,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
                                     ),
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
+                                  ),
+                                  Text(
+                                    'SELESAI',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textSecondary,
+                                      letterSpacing: 0.8,
+                                    ),
                                   ),
                                 ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12.0),
-                      Row(
-                        children: [
-                          Container(
-                            width: 2.0,
-                            height: 40.0,
-                            color: AppColors.borderSubtle.withValues(alpha: 0.5),
-                          ),
-                          const SizedBox(width: 20.0),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                '$percentage%',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                              Text(
-                                'SELESAI',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textSecondary,
-                                  letterSpacing: 0.8,
-                                ),
                               ),
                             ],
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 14.0),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6.0),
+                        child: LinearProgressIndicator(
+                          value: _totalPatientsCount > 0
+                              ? (_screenedPatientsCount / _totalPatientsCount).clamp(0.0, 1.0)
+                              : 0.0,
+                          minHeight: 6.0,
+                          backgroundColor: const Color(0xFFE8F5E9),
+                          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                        ),
                       ),
                     ],
                   ),
@@ -587,11 +602,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           padding: const EdgeInsets.only(left: 4.0),
           child: Text(
             'Akses Cepat Layanan',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.onSurface,
-            ),
+            style: AppTypography.headlineMd(),
           ),
         ),
         const SizedBox(height: 16.0),
@@ -615,7 +626,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               _buildAppleListItem(
                 icon: Icons.medical_services_rounded,
-                iconColor: AppColors.primary,
                 title: 'Skrining Baru',
                 subtitle: 'Input pemeriksaan rutin',
                 onTap: () {
@@ -629,23 +639,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               _buildDivider(indent: 76.0),
               _buildAppleListItem(
-                icon: Icons.history_rounded,
-                iconColor: AppColors.tertiary,
-                title: 'Riwayat',
-                subtitle: 'Cek data sebelumnya',
-                onTap: () {
-                  _navigateToPage(3);
-                  AppToast.show(
-                    context: context,
-                    message: 'Pilih pasien untuk melihat riwayat pemeriksaan',
-                    type: AppToastType.info,
-                  );
-                },
-              ),
-              _buildDivider(indent: 76.0),
-              _buildAppleListItem(
                 icon: Icons.groups_rounded,
-                iconColor: AppColors.secondary,
                 title: 'Data Lansia',
                 subtitle: 'Manajemen biodata pasien',
                 onTap: () {
@@ -661,7 +655,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildAppleListItem({
     required IconData icon,
-    required Color iconColor,
     required String title,
     required String subtitle,
     required VoidCallback onTap,
@@ -672,17 +665,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
         child: Row(
           children: [
-            // Colored container for icon
+            // Unified secondary-container (#E8F5E9) with primary (#00875A) icon
             Container(
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.1),
+                color: const Color(0xFFE8F5E9),
                 borderRadius: BorderRadius.circular(14.0),
               ),
               child: Icon(
                 icon,
-                color: iconColor,
+                color: const Color(0xFF00875A),
                 size: 22,
               ),
             ),
@@ -695,11 +688,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Text(
                     title,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.onSurface,
-                    ),
+                    style: AppTypography.titleCard(),
                   ),
                   const SizedBox(height: 2.0),
                   Text(
@@ -736,210 +725,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Featured Card (Target Hari Ini)
-  Widget _buildFeaturedCard() {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppColors.primaryContainer,
-        borderRadius: BorderRadius.circular(28.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 107, 71, 0.12),
-            blurRadius: 32,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          // Background soft decor circles (glass overlay effect)
-          Positioned(
-            top: -64,
-            right: -64,
-            width: 180,
-            height: 180,
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.06),
-              ),
-            ),
-          ),
 
-          // Content
-          Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Target Hari Ini',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 2.0),
-                        Text(
-                          _targetTodayCount == 0
-                              ? 'Semua warga selesai diskrining'
-                              : 'Selesaikan skrining $_targetTodayCount warga hari ini',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.8),
-                          ),
-                        ),
-                      ],
-                    ),
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.3),
-                          width: 1.0,
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.track_changes_rounded,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 32.0),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Progres Skrining',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.9),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    Text(
-                      '$_screenedTodayCount/$_targetTodayCount Warga',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12.0),
 
-                // Premium Progress Bar
-                Container(
-                  height: 10.0,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(5.0),
-                  ),
-                  child: FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: _targetTodayCount > 0 
-                        ? (_screenedTodayCount / _targetTodayCount).clamp(0.0, 1.0) 
-                        : 0.0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(5.0),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.08),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Premium Bottom Navigation Bar (Glassmorphic style)
+  // Modern Floating Capsule Bottom Navigation Bar (Telegram Style)
   Widget _buildBottomNavBar() {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
     return Container(
-      height: 80.0 + bottomPadding,
+      height: 74.0,
+      padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 6.0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(37.0),
+        border: Border.all(
+          color: AppColors.borderSubtle.withValues(alpha: 0.9),
+          width: 1.0,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 6),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
-        border: Border(
-          top: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.4),
-            width: 1.0,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildNavBarItem(
+            index: 0,
+            activeIcon: Icons.grid_view_rounded,
+            inactiveIcon: Icons.grid_view_outlined,
+            label: 'Beranda',
           ),
-        ),
-      ),
-      padding: EdgeInsets.only(
-        bottom: bottomPadding,
-        left: 16.0,
-        right: 16.0,
-      ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavBarItem(
-                index: 0,
-                icon: Icons.grid_view_rounded,
-                label: 'Dashboard',
-              ),
-              _buildNavBarItem(
-                index: 1,
-                icon: Icons.medical_services_outlined,
-                label: 'Layanan',
-              ),
-              _buildNavBarItem(
-                index: 2,
-                icon: Icons.assignment_turned_in_outlined,
-                label: 'Skrining',
-              ),
-              _buildNavBarItem(
-                index: 3,
-                icon: Icons.groups_outlined,
-                label: 'Pasien',
-              ),
-              _buildNavBarItem(
-                index: 4,
-                icon: Icons.person_outline_rounded,
-                label: 'Profil',
-              ),
-            ],
+          _buildNavBarItem(
+            index: 1,
+            activeIcon: Icons.medical_services_rounded,
+            inactiveIcon: Icons.medical_services_outlined,
+            label: 'Layanan',
+          ),
+          _buildNavBarItem(
+            index: 2,
+            activeIcon: Icons.assignment_turned_in_rounded,
+            inactiveIcon: Icons.assignment_turned_in_outlined,
+            label: 'Skrining',
+          ),
+          _buildNavBarItem(
+            index: 3,
+            activeIcon: Icons.groups_rounded,
+            inactiveIcon: Icons.groups_outlined,
+            label: 'Pasien',
+          ),
+          _buildNavBarItem(
+            index: 4,
+            activeIcon: Icons.person_rounded,
+            inactiveIcon: Icons.person_outline_rounded,
+            label: 'Profil',
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildNavBarItem({
     required int index,
-    required IconData icon,
+    required IconData activeIcon,
+    required IconData inactiveIcon,
     required String label,
   }) {
     final isActive = _currentIndex == index;
@@ -955,32 +809,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Active Background Pill Visual
+              // Active Background Pill Visual (Telegram style)
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                width: 48,
-                height: 32,
+                curve: Curves.easeOutCubic,
+                width: 54,
+                height: 33,
                 decoration: BoxDecoration(
                   color: isActive
-                      ? AppColors.primary.withValues(alpha: 0.1)
+                      ? AppColors.primary.withValues(alpha: 0.14)
                       : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16.0),
+                  borderRadius: BorderRadius.circular(18.0),
                 ),
                 child: Icon(
-                  icon,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
+                  isActive ? activeIcon : inactiveIcon,
+                  color: isActive ? AppColors.primary : AppColors.textSecondary,
                   size: 22,
                 ),
               ),
-              const SizedBox(height: 4.0),
+              const SizedBox(height: 3.0),
               AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 200),
                 style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
+                  fontSize: 10.5,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                  color: isActive ? AppColors.primary : AppColors.textSecondary,
                 ),
-                child: Text(label),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -1046,3 +905,7 @@ class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderS
     );
   }
 }
+
+
+
+
