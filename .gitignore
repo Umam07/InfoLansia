@@ -35,6 +35,7 @@ migrate_working_dir/
 
 # Symbolication related
 app.*.symbols
+build/symbols/
 
 # Obfuscation related
 app.*.map.json
@@ -43,9 +44,14 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
 
 # CodeGraph
 .codegraph/
+
+# Website Next.js (separate deployment)
+website-infolansia/
+.website-infolansia/
 
 # AI tool configs
 .claude/
