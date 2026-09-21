@@ -1,10 +1,18 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:drift/drift.dart' as drift;
+
 import '../../theme.dart';
+import '../../widgets/medical_disclaimer_card.dart';
+import '../../constants/medical_guidelines.dart';
+import '../../database/app_database.dart';
+import '../../services/sync_service.dart';
+import '../../utils/uuid_generator.dart';
 
 class SkriningBaruScreen extends StatefulWidget {
+
   final String patientId;
   final String name;
   final String age;
@@ -35,13 +43,17 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
   // Controllers for Tanda Vital
   final TextEditingController _weightController = TextEditingController();
   final TextEditingController _heightController = TextEditingController();
-  final TextEditingController _bloodPressureController = TextEditingController();
 
-  // Controllers for Hasil Laboratorium
+  // Blood pressure split into 2 numeric fields (Sistolik & Diastolik)
+  final TextEditingController _systolicController = TextEditingController();
+  final TextEditingController _diastolicController = TextEditingController();
+  final FocusNode _systolicFocusNode = FocusNode();
+  final FocusNode _diastolicFocusNode = FocusNode();
+
+  // Controllers for Hasil Laboratorium (Hb removed)
   final TextEditingController _cholesterolController = TextEditingController();
   final TextEditingController _bloodSugarController = TextEditingController();
   final TextEditingController _uricAcidController = TextEditingController();
-  final TextEditingController _hbController = TextEditingController();
 
   @override
   void initState() {
@@ -56,11 +68,13 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
     _dateController.dispose();
     _weightController.dispose();
     _heightController.dispose();
-    _bloodPressureController.dispose();
+    _systolicController.dispose();
+    _diastolicController.dispose();
+    _systolicFocusNode.dispose();
+    _diastolicFocusNode.dispose();
     _cholesterolController.dispose();
     _bloodSugarController.dispose();
     _uricAcidController.dispose();
-    _hbController.dispose();
     super.dispose();
   }
 
@@ -69,7 +83,7 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
   }
 
   String _getMonthName(int month) {
-    final List<String> months = [
+    const List<String> months = [
       'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
       'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
     ];
@@ -125,60 +139,77 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
       });
 
       try {
-        final weight = double.tryParse(_weightController.text);
-        final height = double.tryParse(_heightController.text);
-        final cholesterol = double.tryParse(_cholesterolController.text);
-        final sugar = double.tryParse(_bloodSugarController.text);
-        final uricAcid = double.tryParse(_uricAcidController.text);
-        final hb = double.tryParse(_hbController.text);
+        final weight = double.tryParse(_weightController.text.trim().replaceAll(',', '.'));
+        final height = double.tryParse(_heightController.text.trim().replaceAll(',', '.'));
+        final cholesterol = double.tryParse(_cholesterolController.text.trim().replaceAll(',', '.'));
+        final sugar = double.tryParse(_bloodSugarController.text.trim().replaceAll(',', '.'));
+        final uricAcid = double.tryParse(_uricAcidController.text.trim().replaceAll(',', '.'));
 
-        String status = 'Normal';
-        if ((sugar != null && sugar > 140) ||
-            (cholesterol != null && cholesterol > 200) ||
-            (uricAcid != null && uricAcid > 7.0)) {
-          status = 'Perlu Perhatian';
+        final sysStr = _systolicController.text.trim();
+        final diaStr = _diastolicController.text.trim();
+        String? bp;
+        int? sys;
+        int? dia;
+        if (sysStr.isNotEmpty && diaStr.isNotEmpty) {
+          bp = '$sysStr/$diaStr';
+          sys = int.tryParse(sysStr);
+          dia = int.tryParse(diaStr);
+        } else if (sysStr.isNotEmpty) {
+          bp = sysStr;
         }
 
-        final bp = _bloodPressureController.text.trim();
-        if (bp.isNotEmpty) {
-          final parts = bp.split('/');
-          if (parts.length == 2) {
-            final sys = int.tryParse(parts[0].trim());
-            final dia = int.tryParse(parts[1].trim());
-            if (sys != null && dia != null) {
-              if (sys >= 140 || dia >= 90) {
-                status = 'Perlu Perhatian';
-              }
-            }
-          }
-        }
+        final overall = MedicalGuidelines.evaluateOverallScreening(
+          systolic: sys,
+          diastolic: dia,
+          cholesterol: cholesterol?.round(),
+          sugar: sugar?.round(),
+          uricAcid: uricAcid,
+          gender: widget.gender,
+        );
+        final status = overall.statusType == HealthStatusType.normal ? 'Normal' : 'Perlu Perhatian';
+        final newId = UuidGenerator.generate();
+        final now = DateTime.now();
+        final dateStr = _selectedDate.toIso8601String().split('T').first;
 
-        await Supabase.instance.client.from('screenings').insert({
-          'patient_id': widget.patientId,
-          'date': _selectedDate.toIso8601String().split('T').first,
-          'weight': weight,
-          'height': height,
-          'blood_pressure': bp.isEmpty ? null : bp,
-          'cholesterol': cholesterol,
-          'blood_sugar': sugar,
-          'uric_acid': uricAcid,
-          'hemoglobin': hb,
-          'status': status,
-        });
+        // 1. Simpan ke database lokal Drift (Offline-First)
+        await AppDatabase.instance.upsertScreening(
+          LocalScreeningsCompanion(
+            id: drift.Value(newId),
+            patientId: drift.Value(widget.patientId),
+            date: drift.Value(dateStr),
+            weight: drift.Value(weight),
+            height: drift.Value(height),
+            bloodPressure: drift.Value(bp),
+            cholesterol: drift.Value(cholesterol),
+            bloodSugar: drift.Value(sugar),
+            uricAcid: drift.Value(uricAcid),
+            hemoglobin: const drift.Value(null),
+            status: drift.Value(status),
+            isSynced: const drift.Value(false),
+            syncAction: const drift.Value('insert'),
+            updatedAt: drift.Value(now),
+            createdAt: drift.Value(now),
+          ),
+        );
 
-        setState(() {
-          _isLoading = false;
-        });
+        // 2. Memicu sinkronisasi di latar belakang
+        SyncService.instance.syncAll();
 
-        _showSuccessDialog();
-      } catch (e) {
-        setState(() {
-          _isLoading = false;
-        });
         if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          _showSuccessDialog();
+        }
+      } catch (e) {
+        debugPrint('[SkriningBaru] Gagal menyimpan hasil skrining: $e');
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Gagal menyimpan hasil skrining: $e'),
+            const SnackBar(
+              content: Text('Gagal menyimpan hasil skrining. Silakan coba lagi atau hubungi petugas teknis.'),
               backgroundColor: AppColors.error,
             ),
           );
@@ -194,84 +225,72 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
       barrierDismissible: true,
       builder: (BuildContext context) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
             elevation: 0,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Container(
-              padding: const EdgeInsets.all(28.0),
+              padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Styled Warning Circle (Amber/Orange accent)
                   Container(
-                    width: 72,
-                    height: 72,
+                    width: 64,
+                    height: 64,
                     decoration: BoxDecoration(
-                      color: AppColors.statusWarning.withValues(alpha: 0.1),
+                      color: AppColors.statusWarning.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
                       Icons.warning_amber_rounded,
                       color: AppColors.statusWarning,
-                      size: 44,
+                      size: 36,
                     ),
                   ),
-                  const SizedBox(height: 24.0),
+                  const SizedBox(height: 18.0),
                   Text(
                     'Skrining Sudah Ada',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 12.0),
+                  const SizedBox(height: 10.0),
                   Text(
-                    'Pasien ${widget.name} sudah melakukan skrining pada bulan $monthName ${_selectedDate.year}.\n\nSkrining hanya dapat dilakukan 1 kali per bulan sesuai protokol.',
+                    'Pasien ${widget.name} sudah melakukan skrining pada bulan $monthName ${_selectedDate.year}.\n\nSkrining rutin lansia dilakukan 1 kali per bulan.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 14,
+                      fontSize: 13,
                       color: AppColors.textSecondary,
-                      height: 1.4,
+                      height: 1.5,
                     ),
                   ),
-                  const SizedBox(height: 28.0),
+                  const SizedBox(height: 24.0),
                   _SpringButton(
-                    onTap: () {
-                      Navigator.pop(context); // Pop warning dialog
-                    },
+                    onTap: () => Navigator.pop(context),
                     child: Container(
                       width: double.infinity,
                       height: 48,
                       decoration: BoxDecoration(
                         color: AppColors.statusWarning,
                         borderRadius: BorderRadius.circular(14.0),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.statusWarning.withValues(alpha: 0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
                       ),
                       alignment: Alignment.center,
                       child: Text(
                         'Ubah Tanggal',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                           color: Colors.white,
                         ),
                       ),
@@ -292,64 +311,61 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
       barrierDismissible: false,
       builder: (BuildContext context) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
             elevation: 0,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Container(
-              padding: const EdgeInsets.all(28.0),
+              padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Animated or styled Success Circle
                   Container(
-                    width: 72,
-                    height: 72,
+                    width: 64,
+                    height: 64,
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.1),
+                      color: AppColors.primary.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
                       Icons.check_circle_rounded,
                       color: AppColors.primary,
-                      size: 44,
+                      size: 36,
                     ),
                   ),
-                  const SizedBox(height: 24.0),
+                  const SizedBox(height: 18.0),
                   Text(
                     'Skrining Berhasil!',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 12.0),
+                  const SizedBox(height: 10.0),
                   Text(
-                    'Data skrining baru untuk ${widget.name} telah berhasil disimpan ke database.',
+                    'Data pemeriksaan skrining untuk ${widget.name} berhasil disimpan ke sistem.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 14,
+                      fontSize: 13,
                       color: AppColors.textSecondary,
-                      height: 1.4,
+                      height: 1.5,
                     ),
                   ),
-                  const SizedBox(height: 28.0),
+                  const SizedBox(height: 24.0),
                   _SpringButton(
                     onTap: () {
                       Navigator.pop(context); // Pop dialog
-                      Navigator.pop(context, true); // Pop screen back to Detail with "true" result to refresh
+                      Navigator.pop(context, true); // Pop screen back to list/detail with true
                     },
                     child: Container(
                       width: double.infinity,
@@ -357,20 +373,13 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
                       decoration: BoxDecoration(
                         color: AppColors.primary,
                         borderRadius: BorderRadius.circular(14.0),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
                       ),
                       alignment: Alignment.center,
                       child: Text(
-                        'Kembali ke Detail',
+                        'Selesai',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                           color: Colors.white,
                         ),
                       ),
@@ -387,117 +396,128 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundAlt,
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(64.0),
-        child: _buildAppBar(context),
-      ),
-      body: Stack(
-        children: [
-          // Scrollable Form Content
-          Positioned.fill(
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundAlt,
+        body: Column(
+          children: [
+            _buildAppBar(context),
+          Expanded(
             child: Form(
               key: _formKey,
               child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: ClampingScrollPhysics(),
+                ),
                 padding: EdgeInsets.only(
                   left: 20.0,
                   right: 20.0,
-                  top: 24.0,
-                  bottom: 120.0 + MediaQuery.of(context).padding.bottom, // padding to clear bottom bar
+                  top: 20.0,
+                  bottom: 32.0 + MediaQuery.of(context).padding.bottom,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // Patient Header Card
                     _buildPatientProfileCard(),
-                    const SizedBox(height: 24.0),
+                    const SizedBox(height: 20.0),
 
                     // Service Date Section
-                    _buildSectionHeader('Tanggal Layanan'),
+                    _buildSectionHeader('Tanggal Pemeriksaan'),
                     const SizedBox(height: 8.0),
                     _buildServiceDateCard(),
-                    const SizedBox(height: 24.0),
+                    const SizedBox(height: 20.0),
 
                     // Vital Signs Section
                     _buildSectionHeader('Tanda Vital'),
                     const SizedBox(height: 8.0),
                     _buildVitalSignsCard(),
-                    const SizedBox(height: 24.0),
+                    const SizedBox(height: 20.0),
 
-                    // Lab Results Section
-                    _buildSectionHeader('Hasil Laboratorium'),
+                    // Lab Results Section (Hb removed)
+                    _buildSectionHeader('Hasil Laboratorium (Opsional)'),
                     const SizedBox(height: 8.0),
                     _buildLabResultsCard(),
-                    const SizedBox(height: 32.0),
+                    const SizedBox(height: 28.0),
 
-                    // Save Button
+                    // Save Button (Squircle, height: 52, zero glow, zero gradient)
                     _buildSaveButton(),
+                    const SizedBox(height: 16.0),
+                    const MedicalDisclaimerCard(showSourcesList: true),
                   ],
                 ),
               ),
             ),
           ),
-
-          // Shared Bottom Navigation Bar (Matching HTML Screenshot)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomNavBar(),
-          ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
-  // Header App Bar
+  // Header App Bar (Solid, Minimalist, Matching Sub-screens)
   Widget _buildAppBar(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        border: Border(
-          bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
-            width: 1.0,
-          ),
-        ),
-      ),
+      color: AppColors.surfaceContainerLowest,
       child: SafeArea(
+        bottom: false,
         child: Container(
           height: 64.0,
-          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: AppColors.borderSubtle.withValues(alpha: 0.3),
+                width: 1.0,
+              ),
+            ),
+          ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _SpringButton(
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  FocusScope.of(context).unfocus();
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  Navigator.pop(context);
+                },
                 child: Container(
                   width: 40,
                   height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
+                  ),
                   alignment: Alignment.center,
                   child: const Icon(
-                    Icons.arrow_back_ios_rounded,
-                    color: AppColors.primary,
-                    size: 24.0,
+                    Icons.arrow_back_rounded,
+                    color: AppColors.textPrimary,
+                    size: 20.0,
                   ),
                 ),
               ),
+              const SizedBox(width: 14.0),
               Expanded(
                 child: Text(
-                  'Skrining Baru',
-                  textAlign: TextAlign.center,
+                  'Input Skrining Baru',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.3,
                   ),
                   overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
                 ),
               ),
-              const SizedBox(width: 40.0), // Spacer for centering
             ],
           ),
         ),
@@ -507,38 +527,40 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
 
   // Patient Profile Header Card
   Widget _buildPatientProfileCard() {
+    final isMale = widget.gender == 'Laki-laki';
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
       ),
       child: Row(
         children: [
-          // Circular Avatar
           Container(
-            width: 48,
-            height: 48,
+            width: 46,
+            height: 46,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: widget.gender == 'Laki-laki' 
-                  ? const Color(0x1BBA5855) 
-                  : AppColors.secondaryContainer,
+              color: isMale 
+                  ? AppColors.tertiary.withValues(alpha: 0.12)
+                  : AppColors.primary.withValues(alpha: 0.12),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24.0),
-              child: _buildInitialsAvatar(),
+            child: Center(
+              child: Text(
+                _getInitials(widget.name),
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: isMale ? AppColors.tertiary : AppColors.primary,
+                ),
+              ),
             ),
           ),
-          const SizedBox(width: 16.0),
-          // Name and Details
+          const SizedBox(width: 14.0),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -546,34 +568,38 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
                 Text(
                   widget.name,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.onSurface,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3.0),
+                Text(
+                  '${widget.age} Tahun • ${widget.gender}',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 4.0),
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6.0),
-                    Text(
-                      '${widget.age} Tahun • Pemeriksaan Rutin',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
               ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8.0),
+            ),
+            child: Text(
+              'Lansia RW 06',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primary,
+              ),
             ),
           ),
         ],
@@ -581,35 +607,25 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
     );
   }
 
-  Widget _buildInitialsAvatar() {
-    final initials = widget.name.isNotEmpty
-        ? widget.name.split(' ').map((e) => e[0]).take(2).join('').toUpperCase()
-        : 'P';
-    return Center(
-      child: Text(
-        initials,
-        style: GoogleFonts.plusJakartaSans(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: widget.gender == 'Laki-laki' 
-              ? AppColors.tertiary 
-              : AppColors.primary,
-        ),
-      ),
-    );
+  String _getInitials(String name) {
+    if (name.isEmpty) return 'P';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length > 1) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return parts[0][0].toUpperCase();
   }
 
   // Section Label Heading
   Widget _buildSectionHeader(String title) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4.0),
+      padding: const EdgeInsets.only(left: 2.0),
       child: Text(
-        title.toUpperCase(),
+        title,
         style: GoogleFonts.plusJakartaSans(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: AppColors.textSecondary,
-          letterSpacing: 0.8,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
         ),
       ),
     );
@@ -618,86 +634,76 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
   // Service Date Selection Card
   Widget _buildServiceDateCard() {
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4.0, bottom: 6.0),
-            child: Text(
-              'Pilih Tanggal',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppColors.onSurface,
-              ),
+      child: _SpringButton(
+        onTap: () => _selectDate(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(12.0),
+            border: Border.all(
+              color: AppColors.borderSubtle,
+              width: 1.0,
             ),
           ),
-          _SpringButton(
-            onTap: () => _selectDate(context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
-              decoration: BoxDecoration(
-                color: AppColors.backgroundAlt,
-                borderRadius: BorderRadius.circular(12.0),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.calendar_today_rounded,
+                color: AppColors.primary,
+                size: 18,
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _dateController.text,
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 14,
-                        fontWeight: FontWeight.normal,
-                        color: AppColors.onSurface,
-                      ),
-                    ),
+              const SizedBox(width: 12.0),
+              Expanded(
+                child: Text(
+                  _dateController.text,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
                   ),
-                  const Icon(
-                    Icons.calendar_today_rounded,
-                    color: AppColors.primary,
-                    size: 20,
-                  ),
-                ],
+                ),
               ),
-            ),
+              Text(
+                'Ubah',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  // Vital Signs Form Card
+  // Vital Signs Form Card with Separated Blood Pressure Fields
   Widget _buildVitalSignsCard() {
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Weight Input
               Expanded(
@@ -706,10 +712,10 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
                   hint: '0',
                   suffixText: 'kg',
                   controller: _weightController,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 ),
               ),
-              const SizedBox(width: 16.0),
+              const SizedBox(width: 12.0),
               // Height Input
               Expanded(
                 child: _buildInputField(
@@ -717,100 +723,265 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
                   hint: '0',
                   suffixText: 'cm',
                   controller: _heightController,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16.0),
-          // Blood Pressure Input
-          _buildInputField(
-            label: 'Tekanan Darah',
-            hint: '120/80',
-            suffixText: 'mmHg',
-            controller: _bloodPressureController,
-            keyboardType: TextInputType.text,
-          ),
+
+          // Blood Pressure (Tekanan Darah) Section with Split Numeric Fields
+          _buildSplitBloodPressureField(),
         ],
       ),
     );
   }
 
-  // Lab Results Form Card
+  // Split Blood Pressure: Sistolik & Diastolik in separate numeric fields
+  Widget _buildSplitBloodPressureField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Tekanan Darah',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            Text(
+              'mmHg',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6.0),
+        Row(
+          children: [
+            // Sistolik (Atas / SYS)
+            Expanded(
+              child: Container(
+                height: 48.0,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12.0),
+                  border: Border.all(
+                    color: AppColors.borderSubtle,
+                    width: 1.0,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _systolicController,
+                        focusNode: _systolicFocusNode,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
+                        onChanged: (val) {
+                          // Auto-focus next field when 3 digits are reached (e.g. 120)
+                          if (val.length == 3) {
+                            _diastolicFocusNode.requestFocus();
+                          }
+                          setState(() {});
+                        },
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '120',
+                          hintStyle: GoogleFonts.plusJakartaSans(
+                            color: AppColors.outline,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                      margin: const EdgeInsets.only(right: 6.0),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(6.0),
+                      ),
+                      child: Text(
+                        'SYS',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Separator Badge /
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Text(
+                '/',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.outline,
+                ),
+              ),
+            ),
+
+            // Diastolik (Bawah / DIA)
+            Expanded(
+              child: Container(
+                height: 48.0,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12.0),
+                  border: Border.all(
+                    color: AppColors.borderSubtle,
+                    width: 1.0,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _diastolicController,
+                        focusNode: _diastolicFocusNode,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
+                        onChanged: (val) {
+                          setState(() {});
+                        },
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '80',
+                          hintStyle: GoogleFonts.plusJakartaSans(
+                            color: AppColors.outline,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                      margin: const EdgeInsets.only(right: 6.0),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(6.0),
+                      ),
+                      child: Text(
+                        'DIA',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6.0),
+        Text(
+          'Ketik angka Sistolik (SYS) lalu Diastolik (DIA) tanpa perlu simbol garis miring.',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Lab Results Form Card (Hb removed: Kolesterol, Gula Darah, Asam Urat)
   Widget _buildLabResultsCard() {
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              // Cholesterol Input
+              // Kolesterol Input
               Expanded(
                 child: _buildInputField(
                   label: 'Kolesterol',
                   hint: '0',
                   suffixText: 'mg/dL',
                   controller: _cholesterolController,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 ),
               ),
-              const SizedBox(width: 16.0),
-              // Blood Sugar Input
+              const SizedBox(width: 12.0),
+              // Gula Darah Input
               Expanded(
                 child: _buildInputField(
                   label: 'Gula Darah',
                   hint: '0',
                   suffixText: 'mg/dL',
                   controller: _bloodSugarController,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16.0),
-          Row(
-            children: [
-              // Uric Acid Input
-              Expanded(
-                child: _buildInputField(
-                  label: 'Asam Urat',
-                  hint: '0',
-                  suffixText: 'mg/dL',
-                  controller: _uricAcidController,
-                  keyboardType: TextInputType.number,
-                ),
-              ),
-              const SizedBox(width: 16.0),
-              // Hb Input
-              Expanded(
-                child: _buildInputField(
-                  label: 'Hb',
-                  hint: '0',
-                  suffixText: 'g/dL',
-                  controller: _hbController,
-                  keyboardType: TextInputType.number,
-                ),
-              ),
-            ],
+          const SizedBox(height: 14.0),
+          // Asam Urat Input
+          _buildInputField(
+            label: 'Asam Urat',
+            hint: '0.0',
+            suffixText: 'mg/dL',
+            controller: _uricAcidController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
         ],
       ),
     );
   }
 
-  // Reusable text input field builder
+  // Reusable text input field builder (Minimalist, Solid, Zero Glow)
   Widget _buildInputField({
     required String label,
     required String hint,
@@ -821,65 +992,63 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4.0, bottom: 6.0),
-          child: Text(
-            label,
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.onSurface,
-            ),
+        Text(
+          label,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
           ),
         ),
-        TextFormField(
-          controller: controller,
-          keyboardType: keyboardType,
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: AppColors.onSurface,
+        const SizedBox(height: 6.0),
+        Container(
+          height: 48.0,
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(12.0),
+            border: Border.all(
+              color: AppColors.borderSubtle,
+              width: 1.0,
+            ),
           ),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: GoogleFonts.plusJakartaSans(
-              color: AppColors.iconInactive,
-              fontSize: 14,
+          child: TextFormField(
+            controller: controller,
+            keyboardType: keyboardType,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
             ),
-            filled: true,
-            fillColor: AppColors.backgroundAlt,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12.0),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12.0),
-              borderSide: const BorderSide(
-                color: AppColors.primary,
-                width: 2.0,
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: GoogleFonts.plusJakartaSans(
+                color: AppColors.outline,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w500,
               ),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
-            suffixIcon: Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    suffixText,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.normal,
-                      color: AppColors.textSecondary,
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
+              suffixIcon: Padding(
+                padding: const EdgeInsets.only(right: 12.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      suffixText,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            suffixIconConstraints: const BoxConstraints(
-              minHeight: 0,
-              minWidth: 0,
+              suffixIconConstraints: const BoxConstraints(
+                minHeight: 0,
+                minWidth: 0,
+              ),
             ),
           ),
         ),
@@ -887,157 +1056,47 @@ class _SkriningBaruScreenState extends State<SkriningBaruScreen> {
     );
   }
 
-  // Save Button Action
+  // Save Button Action (Strictly Follows Button Style Guidelines)
+  // Height: 52, Squircle BorderRadius: 16, Solid AppColors.primary, Zero Glow & Zero Gradient
   Widget _buildSaveButton() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: _SpringButton(
-        onTap: _isLoading ? () {} : _handleSave,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 16.0),
-          decoration: BoxDecoration(
-            color: _isLoading ? AppColors.outlineVariant : AppColors.primaryContainer,
-            borderRadius: BorderRadius.circular(12.0),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.2),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: _isLoading
-              ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
+    return _SpringButton(
+      onTap: _isLoading ? () {} : _handleSave,
+      child: Container(
+        width: double.infinity,
+        height: 52,
+        decoration: BoxDecoration(
+          color: _isLoading ? AppColors.outlineVariant : AppColors.primary,
+          borderRadius: BorderRadius.circular(16.0),
+        ),
+        alignment: Alignment.center,
+        child: _isLoading
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2.2,
+                ),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.check_circle_outline_rounded,
                     color: Colors.white,
-                    strokeWidth: 2.0,
+                    size: 20,
                   ),
-                )
-              : Text(
-                  'Simpan Hasil Skrining',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                  const SizedBox(width: 8.0),
+                  Text(
+                    'Simpan Hasil Skrining',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-        ),
-      ),
-    );
-  }
-
-  // Bottom Navigation Bar
-  Widget _buildBottomNavBar() {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    return Container(
-      height: 80.0 + bottomPadding,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-        border: Border(
-          top: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.4),
-            width: 1.0,
-          ),
-        ),
-      ),
-      padding: EdgeInsets.only(
-        bottom: bottomPadding,
-        left: 16.0,
-        right: 16.0,
-      ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavBarItem(
-                index: 0,
-                icon: Icons.grid_view_rounded,
-                label: 'Dashboard',
+                ],
               ),
-              _buildNavBarItem(
-                index: 1,
-                icon: Icons.medical_services_outlined,
-                label: 'Layanan',
-              ),
-              _buildNavBarItem(
-                index: 2,
-                icon: Icons.assignment_turned_in_outlined,
-                label: 'Skrining',
-              ),
-              _buildNavBarItem(
-                index: 3,
-                icon: Icons.groups_outlined,
-                label: 'Pasien',
-              ),
-              _buildNavBarItem(
-                index: 4,
-                icon: Icons.person_outline_rounded,
-                label: 'Profil',
-              ),
-            ],
-          ),
-    );
-  }
-
-  Widget _buildNavBarItem({
-    required int index,
-    required IconData icon,
-    required String label,
-  }) {
-    // Skrining (index 2) is active in this mockup
-    final isActive = index == 2;
-
-    return Expanded(
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () {
-            // Tapping tab bar pops back to dashboard and sets the respective index
-            Navigator.popUntil(context, (route) => route.isFirst);
-          },
-          behavior: HitTestBehavior.opaque,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 48,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? AppColors.primary.withValues(alpha: 0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16.0),
-                ),
-                child: Icon(
-                  icon,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(height: 4.0),
-              AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 200),
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
-                ),
-                child: Text(label),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
