@@ -14,3 +14,7 @@
 # SQLite and Drift
 -keep class org.sqlite.** { *; }
 -dontwarn org.sqlite.**
+
+# Play Core deferred components
+-dontwarn com.google.android.play.core.**
+
