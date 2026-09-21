@@ -59,3 +59,8 @@ website-infolansia/
 .gemini/
 .mcp.json
 GEMINI.md
+
+# Internal documentation & sensitive database scripts
+prd.md
+design.md
+supabase/
