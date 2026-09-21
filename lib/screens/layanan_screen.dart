@@ -3,14 +3,18 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
 import 'layanan/layanan_tensi_screen.dart';
+import 'layanan/layanan_kolesterol_screen.dart';
 import 'layanan/layanan_gula_darah_screen.dart';
+import 'layanan/layanan_asam_urat_screen.dart';
 import 'layanan/visualisasi_tahunan_screen.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/app_pull_to_refresh.dart';
+import '../widgets/medical_disclaimer_card.dart';
+import '../constants/medical_guidelines.dart';
+import '../services/excel_monthly_report_service.dart';
 
 class LayananScreen extends StatefulWidget {
-  const LayananScreen({
-    super.key,
-  });
+  const LayananScreen({super.key});
 
   @override
   State<LayananScreen> createState() => _LayananScreenState();
@@ -20,8 +24,8 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
   String _selectedMonth = 'Oktober';
   String _selectedYear = '2026';
   bool _isLoading = false;
+  bool _isExporting = false;
 
-  // Animation controller for progress bars
   late final AnimationController _progressController;
   late final Animation<double> _progressAnimation;
 
@@ -37,8 +41,10 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     'Juli': 7, 'Agustus': 8, 'September': 9, 'Oktober': 10, 'November': 11, 'Desember': 12
   };
 
+  int _totalPatientsCount = 0;
   int _totalScreeningsCount = 0;
   int _growthPct = 0;
+  int _coveragePct = 0;
   int _normalCount = 0;
   int _warningCount = 0;
   int _dangerCount = 0;
@@ -47,24 +53,23 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
   double _dangerPct = 0.0;
   int _totalTensi = 0;
   int _tensiRate = 0;
+  int _totalKolesterol = 0;
+  int _kolesterolRate = 0;
   int _totalGula = 0;
   int _gulaRate = 0;
+  int _totalAsamUrat = 0;
+  int _asamUratRate = 0;
 
   @override
   void initState() {
     super.initState();
-    // Set current month and year dynamically
     final now = DateTime.now();
-    final months = [
-      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
-    ];
-    _selectedMonth = months[now.month - 1];
+    _selectedMonth = _months[now.month - 1];
     _selectedYear = now.year.toString();
 
     _progressController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 900),
     );
     _progressAnimation = CurvedAnimation(
       parent: _progressController,
@@ -131,41 +136,45 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
       int dangerCount = 0;
 
       int totalTensi = 0;
+      int totalKolesterol = 0;
       int totalGula = 0;
+      int totalAsamUrat = 0;
 
       for (final s in screenings) {
         final bpStr = s['blood_pressure'] as String?;
-        String bpStatus = 'Normal';
+        int? sys;
+        int? dia;
         if (bpStr != null && bpStr.contains('/')) {
           final parts = bpStr.split('/');
           if (parts.length == 2) {
-            final sys = int.tryParse(parts[0].trim());
-            final dia = int.tryParse(parts[1].trim());
+            sys = int.tryParse(parts[0].trim());
+            dia = int.tryParse(parts[1].trim());
             if (sys != null && dia != null) {
               totalTensi++;
-              if (sys >= 140 || dia >= 90) {
-                bpStatus = 'Hipertensi';
-              } else if (sys >= 120 || dia >= 80) {
-                bpStatus = 'Pre-Hipertensi';
-              }
             }
           }
         }
 
-        final sugarVal = s['blood_sugar'] != null ? int.tryParse(s['blood_sugar'].toString()) : null;
-        String sugarStatus = 'Normal';
-        if (sugarVal != null) {
-          totalGula++;
-          if (sugarVal >= 200) {
-            sugarStatus = 'Diabetes';
-          } else if (sugarVal >= 140) {
-            sugarStatus = 'Pre-Diabetes';
-          }
-        }
+        final cholVal = s['cholesterol'] != null ? num.tryParse(s['cholesterol'].toString())?.round() : null;
+        if (cholVal != null) totalKolesterol++;
 
-        if (bpStatus == 'Hipertensi' || sugarStatus == 'Diabetes') {
+        final sugarVal = s['blood_sugar'] != null ? num.tryParse(s['blood_sugar'].toString())?.round() : null;
+        if (sugarVal != null) totalGula++;
+
+        final uricVal = s['uric_acid'] != null ? double.tryParse(s['uric_acid'].toString()) : null;
+        if (uricVal != null) totalAsamUrat++;
+
+        final overall = MedicalGuidelines.evaluateOverallScreening(
+          systolic: sys,
+          diastolic: dia,
+          cholesterol: cholVal,
+          sugar: sugarVal,
+          uricAcid: uricVal,
+        );
+
+        if (overall.statusType == HealthStatusType.danger) {
           dangerCount++;
-        } else if (bpStatus == 'Pre-Hipertensi' || sugarStatus == 'Pre-Diabetes') {
+        } else if (overall.statusType == HealthStatusType.warning) {
           warningCount++;
         } else {
           normalCount++;
@@ -177,13 +186,18 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
       final warningPct = totalScreened > 0 ? warningCount / totalScreened : 0.0;
       final dangerPct = totalScreened > 0 ? dangerCount / totalScreened : 0.0;
 
-      final tensiRate = totalPatients > 0 ? (totalTensi / totalPatients * 100).round() : 0;
-      final gulaRate = totalPatients > 0 ? (totalGula / totalPatients * 100).round() : 0;
+      final coveragePct = totalPatients > 0 ? (totalScreened / totalPatients * 100).clamp(0, 100).round() : 0;
+      final tensiRate = totalPatients > 0 ? (totalTensi / totalPatients * 100).clamp(0, 100).round() : 0;
+      final kolesterolRate = totalPatients > 0 ? (totalKolesterol / totalPatients * 100).clamp(0, 100).round() : 0;
+      final gulaRate = totalPatients > 0 ? (totalGula / totalPatients * 100).clamp(0, 100).round() : 0;
+      final asamUratRate = totalPatients > 0 ? (totalAsamUrat / totalPatients * 100).clamp(0, 100).round() : 0;
 
       if (mounted) {
         setState(() {
+          _totalPatientsCount = totalPatients;
           _totalScreeningsCount = thisMonthCount;
           _growthPct = growthPct;
+          _coveragePct = coveragePct;
           _normalCount = normalCount;
           _warningCount = warningCount;
           _dangerCount = dangerCount;
@@ -192,8 +206,12 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
           _dangerPct = dangerPct;
           _totalTensi = totalTensi;
           _tensiRate = tensiRate;
+          _totalKolesterol = totalKolesterol;
+          _kolesterolRate = kolesterolRate;
           _totalGula = totalGula;
           _gulaRate = gulaRate;
+          _totalAsamUrat = totalAsamUrat;
+          _asamUratRate = asamUratRate;
           _isLoading = false;
         });
 
@@ -214,91 +232,108 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     }
   }
 
-  void _handleSearch() {
-    _fetchReportData();
+  Future<void> _handleExportExcel() async {
+    if (_isExporting) return;
+    setState(() => _isExporting = true);
+
+    try {
+      final monthInt = _monthMap[_selectedMonth] ?? 1;
+      final yearInt = int.tryParse(_selectedYear) ?? DateTime.now().year;
+
+      await ExcelMonthlyReportService.instance.exportAndShareReport(
+        month: monthInt,
+        year: yearInt,
+        monthName: _selectedMonth,
+      );
+
+      if (mounted) {
+        AppToast.show(
+          context: context,
+          message: 'Laporan Excel $_selectedMonth $_selectedYear berhasil disiapkan!',
+          type: AppToastType.success,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.show(
+          context: context,
+          message: 'Gagal mengekspor laporan: $e',
+          type: AppToastType.error,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.backgroundAlt,
-      body: Stack(
+      body: Column(
         children: [
-          // Scrollable Content
-          Positioned.fill(
-            child: Column(
-              children: [
-                _buildHeader(),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.only(
-                      left: 20.0,
-                      right: 20.0,
-                      top: 24.0,
-                      bottom: 120.0, // Space for shared BottomNavBar and FAB
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildFilterSection(),
-                        const SizedBox(height: 24.0),
-                        _buildStatsOverview(),
-                        const SizedBox(height: 32.0),
-                        _buildDetailedBreakdownHeader(),
-                        const SizedBox(height: 16.0),
-                        _buildBentoCardsList(),
-                        const SizedBox(height: 32.0),
-                        _buildVisualisasiBanner(),
-                      ],
-                    ),
-                  ),
+          _buildHeader(),
+          Expanded(
+            child: AppPullToRefresh(
+              onRefresh: _fetchReportData,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: ClampingScrollPhysics(),
                 ),
-              ],
+                padding: const EdgeInsets.only(
+                  left: 20.0,
+                  right: 20.0,
+                  top: 20.0,
+                  bottom: 120.0, // Clearance for floating bottom navbar
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildFilterSection(),
+                    const SizedBox(height: 20.0),
+                    _buildMonthlyOverview(),
+                    const SizedBox(height: 20.0),
+                    _buildHealthDistributionCard(),
+                    const SizedBox(height: 28.0),
+                    _buildServicesSection(),
+                    const SizedBox(height: 28.0),
+                    _buildAnnualAnalyticsCard(),
+                    const SizedBox(height: 24.0),
+                    const MedicalDisclaimerCard(showSourcesList: true),
+                  ],
+                ),
+              ),
             ),
-          ),
-
-          // Contextual floating action button for download
-          Positioned(
-            right: 20.0,
-            bottom: 100.0, // Just above BottomNavigationBar
-            child: _buildDownloadFAB(),
           ),
         ],
       ),
     );
   }
 
-  // Header Widget (TopAppBar style)
+  // 1. Clean Flat Top Header matching other main tabs
   Widget _buildHeader() {
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
-        border: Border(
-          bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
-            width: 1.0,
-          ),
-        ),
-      ),
+      color: AppColors.surfaceContainerLowest,
       child: SafeArea(
         bottom: false,
         child: Container(
           height: 64.0,
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: AppColors.borderSubtle.withValues(alpha: 0.3),
+                width: 1.0,
+              ),
+            ),
+          ),
           child: Row(
             children: [
-              // Screen Title
               Expanded(
                 child: Text(
-                  'Laporan Bulanan',
+                  'Layanan Kesehatan',
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
@@ -316,46 +351,58 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     );
   }
 
-  // Filter Panel (Month & Year select cards)
+  // 2. Filter Section (Month & Year selector)
   Widget _buildFilterSection() {
     return Container(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(18.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.03),
-            blurRadius: 16,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Selectors Row
           Row(
             children: [
-              // Month Selector
+              const Icon(
+                Icons.tune_rounded,
+                size: 16,
+                color: AppColors.textPrimary,
+              ),
+              const SizedBox(width: 8.0),
+              Text(
+                'Periode Pelaporan',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14.0),
+          Row(
+            children: [
+              // Dropdown Bulan
               Expanded(
+                flex: 3,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Pilih Bulan',
+                      'Bulan',
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.onSurfaceVariant,
+                        color: AppColors.textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 8.0),
-                    _buildDropdownCard(
+                    const SizedBox(height: 6.0),
+                    _buildDropdownSelector(
                       value: _selectedMonth,
                       items: _months,
                       onChanged: (val) {
@@ -365,22 +412,23 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
                   ],
                 ),
               ),
-              const SizedBox(width: 16.0),
-              // Year Selector
+              const SizedBox(width: 12.0),
+              // Dropdown Tahun
               Expanded(
+                flex: 2,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Pilih Tahun',
+                      'Tahun',
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.onSurfaceVariant,
+                        color: AppColors.textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 8.0),
-                    _buildDropdownCard(
+                    const SizedBox(height: 6.0),
+                    _buildDropdownSelector(
                       value: _selectedYear,
                       items: _years,
                       onChanged: (val) {
@@ -392,67 +440,119 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
               ),
             ],
           ),
-          const SizedBox(height: 20.0),
-          // Search Button
-          _SpringButton(
-            onTap: _isLoading ? () {} : _handleSearch,
-            child: Container(
-              height: 48.0,
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(16.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.2),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: _isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          const SizedBox(height: 14.0),
+          Row(
+            children: [
+              // Tombol Tampilkan / Refresh Laporan
+              Expanded(
+                child: _SpringButton(
+                  onTap: _isLoading ? () {} : _fetchReportData,
+                  child: Container(
+                    height: 50.0,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(16.0),
+                      border: Border.all(
+                        color: AppColors.borderSubtle,
+                        width: 1.0,
                       ),
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.search_rounded, color: Colors.white, size: 20),
-                        const SizedBox(width: 8.0),
-                        Text(
-                          'Tampilkan',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
                     ),
-            ),
+                    alignment: Alignment.center,
+                    child: _isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: AppColors.primary,
+                            ),
+                          )
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.refresh_rounded,
+                                color: AppColors.textPrimary,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 6.0),
+                              Text(
+                                'Tampilkan',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10.0),
+              // Tombol Ekspor Laporan Excel (.xlsx) - Squircle 16, Solid Primary, Height 50
+              Expanded(
+                flex: 2,
+                child: _SpringButton(
+                  onTap: (_isLoading || _isExporting) ? () {} : _handleExportExcel,
+                  child: Container(
+                    height: 50.0,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(16.0),
+                    ),
+                    alignment: Alignment.center,
+                    child: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          )
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.table_chart_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8.0),
+                              Text(
+                                'Ekspor Excel (.xlsx)',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDropdownCard({
+  Widget _buildDropdownSelector({
     required String value,
     required List<String> items,
     required ValueChanged<String?> onChanged,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      height: 44.0,
+      padding: const EdgeInsets.symmetric(horizontal: 12.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16.0),
+        borderRadius: BorderRadius.circular(12.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
       ),
@@ -461,16 +561,16 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
           value: value,
           isExpanded: true,
           icon: const Icon(
-            Icons.expand_more_rounded,
+            Icons.keyboard_arrow_down_rounded,
             color: AppColors.outline,
             size: 20,
           ),
           style: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: AppColors.onSurface,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
           ),
-          borderRadius: BorderRadius.circular(16.0),
+          borderRadius: BorderRadius.circular(14.0),
           dropdownColor: AppColors.surfaceContainerLowest,
           items: items.map((String val) {
             return DropdownMenuItem<String>(
@@ -484,170 +584,248 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     );
   }
 
-  // Stats Overview with Asymmetric Bento Grid
-  Widget _buildStatsOverview() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+  // 3. Monthly Overview Cards (Executive KPIs)
+  Widget _buildMonthlyOverview() {
+    return Row(
       children: [
-        // Total Skrining Card (Green Card)
-        Container(
-          height: 160,
-          padding: const EdgeInsets.all(24.0),
-          decoration: BoxDecoration(
-            color: AppColors.primaryContainer,
-            borderRadius: BorderRadius.circular(28.0),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primaryContainer.withValues(alpha: 0.12),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
+        // Primary Metric: Total Skrining
+        Expanded(
+          flex: 6,
+          child: Container(
+            padding: const EdgeInsets.all(18.0),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(20.0),
+              border: Border.all(
+                color: AppColors.borderSubtle,
+                width: 1.0,
               ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // Abstract light circle background graphic
-              Positioned(
-                right: -40,
-                bottom: -40,
-                width: 140,
-                height: 140,
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppColors.secondaryContainer,
+                        borderRadius: BorderRadius.circular(10.0),
+                      ),
+                      child: const Icon(
+                        Icons.assignment_turned_in_rounded,
+                        color: AppColors.primary,
+                        size: 20,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                      decoration: BoxDecoration(
+                        color: _growthPct >= 0
+                            ? AppColors.primary.withValues(alpha: 0.1)
+                            : AppColors.error.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6.0),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            Icons.groups_rounded,
-                            color: Colors.white.withValues(alpha: 0.85),
-                            size: 32,
+                            _growthPct >= 0 ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                            size: 11,
+                            color: _growthPct >= 0 ? AppColors.primary : AppColors.error,
+                          ),
+                          const SizedBox(width: 3.0),
+                          Text(
+                            '${_growthPct.abs()}%',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _growthPct >= 0 ? AppColors.primary : AppColors.error,
+                            ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8.0),
-                      Text(
-                        'Total Skrining',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white.withValues(alpha: 0.9),
-                        ),
-                      ),
-                      const SizedBox(height: 4.0),
-                      Text(
-                        '$_totalScreeningsCount',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 32,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          height: 1.0,
-                        ),
-                      ),
-                    ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14.0),
+                Text(
+                  '$_totalScreeningsCount',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
+                    height: 1.0,
                   ),
-                  Row(
-                    children: [
-                      Icon(
-                        _growthPct >= 0 ? Icons.trending_up_rounded : Icons.trending_down_rounded,
-                        color: AppColors.primaryFixed,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4.0),
-                      Text(
-                        '${_growthPct >= 0 ? '+' : ''}$_growthPct% dari bulan lalu',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primaryFixed,
-                        ),
-                      ),
-                    ],
+                ),
+                const SizedBox(height: 4.0),
+                Text(
+                  'Pemeriksaan Bulan Ini',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textSecondary,
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 16.0),
-
-        // Distribusi Status Kesehatan Card (Progress Bars)
-        Container(
-          padding: const EdgeInsets.all(24.0),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(28.0),
-            border: Border.all(
-              color: AppColors.borderSubtle.withValues(alpha: 0.5),
-              width: 1.0,
+        const SizedBox(width: 12.0),
+        // Secondary Metric: Cakupan Warga Terperiksa
+        Expanded(
+          flex: 5,
+          child: Container(
+            padding: const EdgeInsets.all(18.0),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(20.0),
+              border: Border.all(
+                color: AppColors.borderSubtle,
+                width: 1.0,
+              ),
             ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color.fromRGBO(0, 0, 0, 0.03),
-                blurRadius: 24,
-                offset: Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Distribusi Status Kesehatan',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.onSurface,
-                  letterSpacing: -0.2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(10.0),
+                  ),
+                  child: const Icon(
+                    Icons.groups_rounded,
+                    color: AppColors.textPrimary,
+                    size: 20,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 20.0),
-              // Normal Bar
-              _buildHealthProgressBar(
-                label: 'Normal',
-                count: '$_normalCount Pasien (${(_normalPct * 100).round()}%)',
-                percentage: _normalPct,
-                color: AppColors.primary,
-              ),
-              const SizedBox(height: 20.0),
-              // Risiko Sedang Bar
-              _buildHealthProgressBar(
-                label: 'Risiko Sedang',
-                count: '$_warningCount Pasien (${(_warningPct * 100).round()}%)',
-                percentage: _warningPct,
-                color: AppColors.statusWarning,
-              ),
-              const SizedBox(height: 20.0),
-              // Risiko Tinggi Bar
-              _buildHealthProgressBar(
-                label: 'Risiko Tinggi',
-                count: '$_dangerCount Pasien (${(_dangerPct * 100).round()}%)',
-                percentage: _dangerPct,
-                color: AppColors.error,
-              ),
-            ],
+                const SizedBox(height: 14.0),
+                Text(
+                  '$_coveragePct%',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primary,
+                    height: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 4.0),
+                Text(
+                  _totalPatientsCount > 0
+                      ? '$_totalScreeningsCount dari $_totalPatientsCount Lansia'
+                      : 'Cakupan Lansia',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textSecondary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildHealthProgressBar({
+  // 4. Sebaran Status Kesehatan (Clean Solid Progress Bars)
+  Widget _buildHealthDistributionCard() {
+    return Container(
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Distribusi Status Kesehatan',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(6.0),
+                ),
+                child: Text(
+                  '$_totalScreeningsCount Pasien',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6.0),
+          Text(
+            'Rekapitulasi tensi, kolesterol, gula darah, dan asam urat',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 20.0),
+
+          // Normal Bar
+          _buildStatusBarRow(
+            label: 'Normal / Sehat',
+            countText: '$_normalCount warga',
+            pctText: '(${(_normalPct * 100).round()}%)',
+            percentage: _normalPct,
+            barColor: AppColors.primary,
+          ),
+          const SizedBox(height: 16.0),
+
+          // Waspada / Risiko Sedang Bar
+          _buildStatusBarRow(
+            label: 'Risiko Sedang (Waspada)',
+            countText: '$_warningCount warga',
+            pctText: '(${(_warningPct * 100).round()}%)',
+            percentage: _warningPct,
+            barColor: AppColors.statusWarning,
+          ),
+          const SizedBox(height: 16.0),
+
+          // Bahaya / Risiko Tinggi Bar
+          _buildStatusBarRow(
+            label: 'Risiko Tinggi (Perlu Tindakan)',
+            countText: '$_dangerCount warga',
+            pctText: '(${(_dangerPct * 100).round()}%)',
+            percentage: _dangerPct,
+            barColor: AppColors.error,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBarRow({
     required String label,
-    required String count,
+    required String countText,
+    required String pctText,
     required double percentage,
-    required Color color,
+    required Color barColor,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -656,47 +834,75 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Expanded(
-              child: Text(
-                label,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: color,
-                ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: barColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8.0),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 8.0),
-            Text(
-              count,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: AppColors.textSecondary,
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  countText,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(width: 6.0),
+                Text(
+                  pctText,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: barColor,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
         const SizedBox(height: 8.0),
-        // Progress Track & Indicator
         AnimatedBuilder(
           animation: _progressAnimation,
           builder: (context, child) {
             return Container(
-              height: 12.0,
+              height: 8.0,
               width: double.infinity,
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(6.0),
+                borderRadius: BorderRadius.circular(4.0),
               ),
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
-                widthFactor: _progressAnimation.value * percentage,
+                widthFactor: (_progressAnimation.value * percentage).clamp(0.0, 1.0),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(6.0),
+                    color: barColor,
+                    borderRadius: BorderRadius.circular(4.0),
                   ),
                 ),
               ),
@@ -707,68 +913,205 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     );
   }
 
-  // Detailed Breakdown Header (Export buttons)
-  Widget _buildDetailedBreakdownHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  // 5. Rincian Per Layanan (Clean Minimalist Service Cards)
+  Widget _buildServicesSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Text(
-            'Rincian Per Layanan',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: AppColors.onSurface,
-              letterSpacing: -0.3,
-            ),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 1,
+        Text(
+          'Rincian Layanan Kesehatan',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+            letterSpacing: -0.2,
           ),
         ),
-        const SizedBox(width: 12.0),
-        Row(
-          children: [
-            _buildExportButton(
-              label: 'PDF',
-              icon: Icons.picture_as_pdf_rounded,
-              onTap: () => _handleExport('PDF'),
-            ),
-            const SizedBox(width: 8.0),
-            _buildExportButton(
-              label: 'Excel',
-              icon: Icons.table_view_rounded,
-              onTap: () => _handleExport('Excel'),
-            ),
-          ],
+        const SizedBox(height: 4.0),
+        Text(
+          'Pilih salah satu layanan untuk melihat riwayat dan pencatatan kader',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 12,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 14.0),
+
+        // Service 1: Pemeriksaan Tekanan Darah
+        _buildServiceCard(
+          title: 'Tekanan Darah (Tensi)',
+          icon: Icons.monitor_heart_outlined,
+          iconBg: AppColors.secondaryContainer,
+          iconColor: AppColors.primary,
+          totalDone: '$_totalTensi',
+          rateText: '$_tensiRate% cakupan',
+          statusLabel: _tensiRate >= 70 ? 'Aktif' : 'Perlu Didorong',
+          statusColor: _tensiRate >= 70 ? AppColors.primary : AppColors.statusWarning,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LayananTensiScreen(),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 10.0),
+
+        // Service 2: Pemeriksaan Kolesterol
+        _buildServiceCard(
+          title: 'Kolesterol Total',
+          icon: Icons.water_drop_outlined,
+          iconBg: const Color(0xFFFFF3E0),
+          iconColor: const Color(0xFFE65100),
+          totalDone: '$_totalKolesterol',
+          rateText: '$_kolesterolRate% cakupan',
+          statusLabel: _kolesterolRate >= 70 ? 'Aktif' : 'Perlu Didorong',
+          statusColor: _kolesterolRate >= 70 ? AppColors.primary : AppColors.statusWarning,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LayananKolesterolScreen(),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 10.0),
+
+        // Service 3: Pemeriksaan Gula Darah
+        _buildServiceCard(
+          title: 'Gula Darah',
+          icon: Icons.bloodtype_outlined,
+          iconBg: AppColors.tertiaryFixed,
+          iconColor: AppColors.tertiary,
+          totalDone: '$_totalGula',
+          rateText: '$_gulaRate% cakupan',
+          statusLabel: _gulaRate >= 70 ? 'Aktif' : 'Perlu Didorong',
+          statusColor: _gulaRate >= 70 ? AppColors.primary : AppColors.statusWarning,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LayananGulaDarahScreen(),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 10.0),
+
+        // Service 4: Pemeriksaan Asam Urat
+        _buildServiceCard(
+          title: 'Asam Urat',
+          icon: Icons.science_outlined,
+          iconBg: const Color(0xFFE0F2F1),
+          iconColor: const Color(0xFF00695C),
+          totalDone: '$_totalAsamUrat',
+          rateText: '$_asamUratRate% cakupan',
+          statusLabel: _asamUratRate >= 70 ? 'Aktif' : 'Perlu Didorong',
+          statusColor: _asamUratRate >= 70 ? AppColors.primary : AppColors.statusWarning,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LayananAsamUratScreen(),
+              ),
+            );
+          },
         ),
       ],
     );
   }
 
-  Widget _buildExportButton({
-    required String label,
+  Widget _buildServiceCard({
+    required String title,
     required IconData icon,
+    required Color iconBg,
+    required Color iconColor,
+    required String totalDone,
+    required String rateText,
+    required String statusLabel,
+    required Color statusColor,
     required VoidCallback onTap,
   }) {
     return _SpringButton(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 13.0),
         decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(10.0),
+          color: AppColors.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(16.0),
+          border: Border.all(
+            color: AppColors.borderSubtle,
+            width: 1.0,
+          ),
         ),
         child: Row(
           children: [
-            Icon(icon, color: AppColors.primary, size: 14),
-            const SizedBox(width: 6.0),
-            Text(
-              label,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppColors.primary,
+            // Compact Icon Squircle
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: iconBg,
+                borderRadius: BorderRadius.circular(12.0),
               ),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 14.0),
+            // Title & Meta Info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 3.0),
+                  Text(
+                    '$totalDone lansia terperiksa • $rateText',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10.0),
+            // Status Pill Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6.0),
+              ),
+              child: Text(
+                statusLabel,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: statusColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8.0),
+            // Minimal Chevron
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 13,
+              color: AppColors.outline,
             ),
           ],
         ),
@@ -776,460 +1119,156 @@ class _LayananScreenState extends State<LayananScreen> with TickerProviderStateM
     );
   }
 
-  void _handleExport(String type) {
-    AppToast.show(
-      context: context,
-      message: 'Mengekspor laporan ke format $type...',
-      type: AppToastType.info,
-    );
-  }
-
-  // Bento List Cards for services
-  Widget _buildBentoCardsList() {
-    return Column(
-      children: [
-        // Card 1: Pemeriksaan Tensi
-        _buildBentoCard(
-          icon: Icons.monitor_heart_rounded,
-          iconBg: AppColors.secondaryContainer,
-          iconColor: AppColors.onSecondaryContainer,
-          statusLabel: _tensiRate >= 80 ? 'Aktif' : 'Perlu Perhatian',
-          statusBg: _tensiRate >= 80 
-              ? AppColors.primary.withValues(alpha: 0.08) 
-              : AppColors.statusWarning.withValues(alpha: 0.08),
-          statusTextColor: _tensiRate >= 80 ? AppColors.primary : AppColors.statusWarning,
-          title: 'Pemeriksaan Tensi',
-          subtitle: 'Skrining tekanan darah rutin lansia.',
-          total: '$_totalTensi',
-          rate: '$_tensiRate%',
-          rateColor: _tensiRate >= 80 ? AppColors.primary : AppColors.statusWarning,
+  // 6. Visualisasi & Analitik Tahunan (Solid Flat Card)
+  Widget _buildAnnualAnalyticsCard() {
+    return Container(
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
         ),
-        const SizedBox(height: 16.0),
-        // Card 2: Cek Gula Darah
-        _buildBentoCard(
-          icon: Icons.medical_information_rounded,
-          iconBg: AppColors.tertiaryFixed,
-          iconColor: AppColors.tertiary,
-          statusLabel: _gulaRate >= 80 ? 'Aktif' : 'Perhatian',
-          statusBg: _gulaRate >= 80 
-              ? AppColors.primary.withValues(alpha: 0.08) 
-              : AppColors.statusWarning.withValues(alpha: 0.08),
-          statusTextColor: _gulaRate >= 80 ? AppColors.primary : AppColors.statusWarning,
-          title: 'Cek Gula Darah',
-          subtitle: 'Pemantauan glukosa bulanan.',
-          total: '$_totalGula',
-          rate: '$_gulaRate%',
-          rateColor: _gulaRate >= 80 ? AppColors.primary : AppColors.statusWarning,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBentoCard({
-    required IconData icon,
-    required Color iconBg,
-    required Color iconColor,
-    required String statusLabel,
-    required Color statusBg,
-    required Color statusTextColor,
-    required String title,
-    required String subtitle,
-    required String total,
-    required String rate,
-    required Color rateColor,
-  }) {
-    return _SpringButton(
-      onTap: () {
-        if (title == 'Pemeriksaan Tensi') {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const LayananTensiScreen(),
-            ),
-          );
-          return;
-        } else if (title == 'Cek Gula Darah') {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const LayananGulaDarahScreen(),
-            ),
-          );
-          return;
-        }
-        AppToast.show(
-          context: context,
-          message: 'Membuka rincian $title',
-          type: AppToastType.info,
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(20.0),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLowest,
-          borderRadius: BorderRadius.circular(24.0),
-          border: Border.all(
-            color: AppColors.borderSubtle.withValues(alpha: 0.5),
-            width: 1.0,
-          ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color.fromRGBO(0, 0, 0, 0.02),
-              blurRadius: 16,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Top Section (Icon & Tag)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: iconBg,
-                    borderRadius: BorderRadius.circular(16.0),
-                  ),
-                  child: Icon(icon, color: iconColor, size: 24),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
-                  decoration: BoxDecoration(
-                    color: statusBg,
-                    borderRadius: BorderRadius.circular(6.0),
-                  ),
-                  child: Text(
-                    statusLabel.toUpperCase(),
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: statusTextColor,
-                      letterSpacing: 0.5,
-                    ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9.0, vertical: 4.0),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(8.0),
+                  border: Border.all(
+                    color: AppColors.borderSubtle,
+                    width: 1.0,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16.0),
-            // Middle Section (Text)
-            Text(
-              title,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: AppColors.onSurface,
-              ),
-            ),
-            const SizedBox(height: 4.0),
-            Text(
-              subtitle,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 20.0),
-            // Divider
-            Divider(
-              height: 1.0,
-              thickness: 0.5,
-              color: AppColors.borderSubtle.withValues(alpha: 0.5),
-            ),
-            const SizedBox(height: 16.0),
-            // Bottom Section (Stats)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      'Total Selesai',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.outline,
-                      ),
+                    const Icon(
+                      Icons.insights_rounded,
+                      color: AppColors.primary,
+                      size: 13,
                     ),
-                    const SizedBox(height: 4.0),
+                    const SizedBox(width: 5.0),
                     Text(
-                      total,
+                      'TREN KESEHATAN TAHUNAN',
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.onSurface,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ],
                 ),
-                Text(
-                  rate,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: rateColor,
-                    letterSpacing: -0.5,
-                  ),
+              ),
+              Text(
+                'Tahun $_selectedYear',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
                 ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Visualisasi Data Tahunan Banner
-  Widget _buildVisualisasiBanner() {
-    return Container(
-      height: 250,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFF004D33),
-            Color(0xFF007A51),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(28.0),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF004D33).withValues(alpha: 0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+              ),
+            ],
           ),
-        ],
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
-          width: 1.5,
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26.5),
-        child: Stack(
-          children: [
-            // Decorative subtle background grid circles
-            Positioned(
-              right: -60,
-              top: -60,
-              width: 220,
-              height: 220,
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.03),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    width: 2.0,
-                  ),
-                ),
+          const SizedBox(height: 12.0),
+          Text(
+            'Visualisasi Data Tahunan',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textPrimary,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 4.0),
+          Text(
+            'Evaluasi perkembangan tensi, gula darah, dan keaktifan warga lansia sepanjang tahun dalam grafik komprehensif.',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 12,
+              height: 1.4,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 16.0),
+
+          // Solid Mini Preview Chart
+          Container(
+            height: 100,
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10.0),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14.0),
+              border: Border.all(
+                color: AppColors.borderSubtle,
+                width: 1.0,
               ),
             ),
-            // Beautiful interactive mini trend chart on the right side of the card
-            Positioned(
-              right: -10,
-              bottom: 0,
-              width: MediaQuery.of(context).size.width * 0.45,
-              height: 180,
-              child: const _MiniChartWidget(),
-            ),
-            // Gradient overlay to fade the chart into the left text
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: MediaQuery.of(context).size.width * 0.5,
-              child: IgnorePointer(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        const Color(0xFF004D33),
-                        const Color(0xFF004D33).withValues(alpha: 0.8),
-                        Colors.transparent,
-                      ],
-                      stops: const [0.0, 0.3, 1.0],
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                    ),
-                  ),
+            child: const _SolidMiniChartWidget(),
+          ),
+          const SizedBox(height: 16.0),
+
+          // Primary CTA: Squircle 16, height 48, solid AppColors.primary, Zero Glow & Zero Gradient
+          _SpringButton(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const VisualisasiTahunanScreen(),
                 ),
+              );
+            },
+            child: Container(
+              height: 48.0,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(16.0),
               ),
-            ),
-            // Text & Action Content on the left
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              alignment: Alignment.center,
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Expanded(
-                    flex: 12,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Dynamic Tag
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(30.0),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.15),
-                              width: 1.0,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.auto_awesome_rounded,
-                                color: AppColors.primaryFixed,
-                                size: 12,
-                              ),
-                              const SizedBox(width: 6.0),
-                              Text(
-                                'Fitur Analitik',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.primaryFixed,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8.0),
-                        // Main Title
-                        Text(
-                          'Visualisasi Data Tahunan',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            letterSpacing: -0.4,
-                          ),
-                        ),
-                        const SizedBox(height: 6.0),
-                        // Subtitle
-                        Text(
-                          'Pantau tren pertumbuhan, kesehatan, dan keaktifan lansia sepanjang tahun dalam bentuk chart interaktif.',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            height: 1.4,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white.withValues(alpha: 0.75),
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 12.0),
-                        // CTA Action Button with glowing shadow
-                        _SpringButton(
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const VisualisasiTahunanScreen(),
-                              ),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 10.0),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14.0),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.1),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Lihat Tren Analitik',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: const Color(0xFF004D33),
-                                  ),
-                                ),
-                                const SizedBox(width: 6.0),
-                                const Icon(
-                                  Icons.arrow_forward_rounded,
-                                  color: Color(0xFF004D33),
-                                  size: 14,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
+                  Text(
+                    'Buka Analisis Visualisasi Tahunan',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
                     ),
                   ),
-                  const Spacer(flex: 7),
+                  const SizedBox(width: 8.0),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    color: Colors.white,
+                    size: 16,
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // download Floating Action Button
-  Widget _buildDownloadFAB() {
-    return _SpringButton(
-      onTap: () {
-        AppToast.show(
-          context: context,
-          message: 'Menyiapkan berkas unduhan laporan...',
-          type: AppToastType.success,
-        );
-      },
-      child: Container(
-        width: 56.0,
-        height: 56.0,
-        decoration: BoxDecoration(
-          color: AppColors.primary,
-          borderRadius: BorderRadius.circular(18.0),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.35),
-              blurRadius: 20,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        child: const Icon(
-          Icons.download_rounded,
-          color: Colors.white,
-          size: 26,
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-// Beautiful interactive mini trend chart on the right side of the card
-class _MiniChartWidget extends StatefulWidget {
-  const _MiniChartWidget();
+// Solid Mini Trend Chart (Zero Gradient, Zero Glow, Clean Canvas)
+class _SolidMiniChartWidget extends StatefulWidget {
+  const _SolidMiniChartWidget();
 
   @override
-  State<_MiniChartWidget> createState() => _MiniChartWidgetState();
+  State<_SolidMiniChartWidget> createState() => _SolidMiniChartWidgetState();
 }
 
-class _MiniChartWidgetState extends State<_MiniChartWidget> with SingleTickerProviderStateMixin {
+class _SolidMiniChartWidgetState extends State<_SolidMiniChartWidget> with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _animation;
 
@@ -1238,7 +1277,7 @@ class _MiniChartWidgetState extends State<_MiniChartWidget> with SingleTickerPro
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1000),
     );
     _animation = CurvedAnimation(
       parent: _controller,
@@ -1259,54 +1298,65 @@ class _MiniChartWidgetState extends State<_MiniChartWidget> with SingleTickerPro
       animation: _animation,
       builder: (context, child) {
         return CustomPaint(
-          painter: _MiniChartPainter(progress: _animation.value),
+          painter: _SolidMiniChartPainter(progress: _animation.value),
         );
       },
     );
   }
 }
 
-class _MiniChartPainter extends CustomPainter {
+class _SolidMiniChartPainter extends CustomPainter {
   final double progress;
 
-  _MiniChartPainter({required this.progress});
+  _SolidMiniChartPainter({required this.progress});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paintLine = Paint()
-      ..color = const Color(0xFF8DF7C1).withValues(alpha: 0.9)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0
-      ..strokeCap = StrokeCap.round;
-
-    final paintFill = Paint()
-      ..style = PaintingStyle.fill;
-
-    // Draw some subtle grid lines
+    // Grid Lines
     final paintGrid = Paint()
-      ..color = Colors.white.withValues(alpha: 0.04)
+      ..color = AppColors.borderSubtle
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
 
-    final double gridSpacing = size.height / 4;
-    for (int i = 1; i < 4; i++) {
+    final double gridSpacing = size.height / 3;
+    for (int i = 1; i < 3; i++) {
       final double y = i * gridSpacing;
       canvas.drawLine(Offset(0, y), Offset(size.width, y), paintGrid);
     }
 
-    // Chart points
+    // Chart Line: Clean Solid Primary
+    final paintLine = Paint()
+      ..color = AppColors.primary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // Normal baseline line (subtle reference)
+    final paintBaseline = Paint()
+      ..color = AppColors.primary.withValues(alpha: 0.25)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+
+    // Sample normalized year curve points
     final List<Offset> points = [
-      Offset(size.width * 0.0, size.height * 0.8),
-      Offset(size.width * 0.2, size.height * 0.7),
-      Offset(size.width * 0.4, size.height * 0.35),
-      Offset(size.width * 0.6, size.height * 0.5),
-      Offset(size.width * 0.8, size.height * 0.15),
-      Offset(size.width * 1.0, size.height * 0.25),
+      Offset(size.width * 0.05, size.height * 0.70),
+      Offset(size.width * 0.22, size.height * 0.60),
+      Offset(size.width * 0.40, size.height * 0.35),
+      Offset(size.width * 0.58, size.height * 0.45),
+      Offset(size.width * 0.76, size.height * 0.25),
+      Offset(size.width * 0.95, size.height * 0.30),
     ];
 
     if (points.isEmpty) return;
 
-    // Calculate animated path
+    // Draw reference line
+    canvas.drawLine(
+      Offset(0, size.height * 0.5),
+      Offset(size.width, size.height * 0.5),
+      paintBaseline,
+    );
+
     final path = Path();
     path.moveTo(points[0].dx, points[0].dy);
 
@@ -1314,7 +1364,6 @@ class _MiniChartPainter extends CustomPainter {
       final p1 = points[i];
       final p2 = points[i + 1];
 
-      // Cubic bezier control points for smooth curves
       final controlX1 = p1.dx + (p2.dx - p1.dx) / 2;
       final controlY1 = p1.dy;
       final controlX2 = p1.dx + (p2.dx - p1.dx) / 2;
@@ -1339,69 +1388,33 @@ class _MiniChartPainter extends CustomPainter {
       }
     }
 
-    // Draw filling gradient under the line
-    if (progress > 0) {
-      final fillPath = Path.from(path);
-      final double lastX = size.width * progress;
-      fillPath.lineTo(lastX, size.height);
-      fillPath.lineTo(0, size.height);
-      fillPath.close();
-
-      paintFill.shader = LinearGradient(
-        colors: [
-          const Color(0xFF8DF7C1).withValues(alpha: 0.18),
-          const Color(0xFF8DF7C1).withValues(alpha: 0.0),
-        ],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-      canvas.drawPath(fillPath, paintFill);
-    }
-
-    // Draw the glowing line itself
+    // Draw the solid line
     canvas.drawPath(path, paintLine);
 
-    // Draw glowing circles at some key points (e.g. highest peaks)
-    final paintOuterDot = Paint()
-      ..color = const Color(0xFF8DF7C1).withValues(alpha: 0.4)
+    // Draw solid dots on key points (strictly no glow)
+    final paintDot = Paint()
+      ..color = AppColors.primary
       ..style = PaintingStyle.fill;
 
-    final paintInnerDot = Paint()
+    final paintDotCenter = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
 
-    // Draw dot for the peak
-    if (progress >= 0.8) {
-      final Offset peakPoint = points[4];
-      canvas.drawCircle(peakPoint, 8.0, paintOuterDot);
-      canvas.drawCircle(peakPoint, 4.0, paintInnerDot);
-    }
-
-    // Draw end pulsing point
-    if (progress > 0) {
-      final double lastX = size.width * progress;
-      double lastY = size.height * 0.5;
-      for (int i = 0; i < points.length - 1; i++) {
-        if (lastX >= points[i].dx && lastX <= points[i + 1].dx) {
-          final double ratio = (lastX - points[i].dx) / (points[i + 1].dx - points[i].dx);
-          lastY = points[i].dy + (points[i + 1].dy - points[i].dy) * ratio;
-          break;
-        }
+    for (int i = 0; i < points.length; i++) {
+      if (progress >= i / (points.length - 1)) {
+        canvas.drawCircle(points[i], 4.0, paintDot);
+        canvas.drawCircle(points[i], 2.0, paintDotCenter);
       }
-      final Offset currentEnd = Offset(lastX, lastY);
-      canvas.drawCircle(currentEnd, 6.0, paintOuterDot);
-      canvas.drawCircle(currentEnd, 3.0, paintInnerDot);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _MiniChartPainter oldDelegate) {
+  bool shouldRepaint(covariant _SolidMiniChartPainter oldDelegate) {
     return oldDelegate.progress != progress;
   }
 }
 
-// Private Spring Button for tactile clicks
+// Tactile Click Button
 class _SpringButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
@@ -1425,7 +1438,7 @@ class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderS
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 100),
-      lowerBound: 0.95,
+      lowerBound: 0.96,
       upperBound: 1.0,
       value: 1.0,
     );

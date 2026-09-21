@@ -3,8 +3,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'constants/supabase_config.dart';
 import 'theme.dart';
-import 'screens/login_screen.dart';
+import 'screens/welcome_screen.dart';
 import 'screens/dashboard_screen.dart';
+
+import 'services/kader_auth_service.dart';
+import 'services/network_connectivity_service.dart';
+import 'services/sync_service.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,13 +19,44 @@ void main() async {
     publishableKey: SupabaseConfig.anonKey,
   );
 
+  // Inisialisasi listener koneksi & auto-sync saat koneksi pulih
+  await NetworkConnectivityService.instance.initialize(
+    onRestored: () {
+      debugPrint('[Main] Jaringan pulih, memulai sinkronisasi otomatis...');
+      SyncService.instance.syncAll();
+    },
+  );
+
   final session = Supabase.instance.client.auth.currentSession;
+  bool showDashboard = false;
+
+  if (session != null && session.user.email != null) {
+    // 1. Cek apakah kader telah terverifikasi secara lokal (Offline-friendly)
+    final isVerifiedLocally = await KaderAuthService.isKaderVerifiedLocally();
+    if (isVerifiedLocally) {
+      showDashboard = true;
+      // Picu re-validasi di latar belakang saat online (deteksi kader dinonaktifkan admin)
+      KaderAuthService.revalidateCurrentKader();
+    } else {
+      // 2. Jika sesi ada tapi belum ada cache lokal, coba validasi online sekali
+      final validation =
+          await KaderAuthService.validateKaderOnline(session.user.email!);
+      if (validation.isAllowed) {
+        showDashboard = true;
+      } else {
+        await Supabase.instance.client.auth.signOut();
+        try {
+          await GoogleSignIn.instance.signOut();
+        } catch (_) {}
+      }
+    }
+  }
 
   // Pre-cache semua varian Google Fonts yang dipakai di app
   // agar tidak ada network request saat widget rebuild (keyboard muncul)
   await _prefetchFonts();
   
-  runApp(MyApp(showDashboard: session != null));
+  runApp(MyApp(showDashboard: showDashboard));
 }
 
 /// Pre-fetch all Google Fonts variants used throughout the app
@@ -55,10 +91,11 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Posyandu Cloud',
+      title: 'Info Lansia',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: showDashboard ? const DashboardScreen() : const LoginScreen(),
+      home: showDashboard ? const DashboardScreen() : const WelcomeScreen(),
     );
   }
 }
+

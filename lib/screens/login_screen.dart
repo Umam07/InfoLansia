@@ -1,11 +1,13 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:lottie/lottie.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
 import 'dashboard_screen.dart';
+import '../services/kader_auth_service.dart';
+import '../widgets/kader_access_denied_sheet.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -14,44 +16,8 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _entranceController;
-  late final Animation<double> _opacityAnimation;
-  late final Animation<Offset> _slideAnimation;
-
+class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _entranceController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-
-    _opacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _entranceController, curve: Curves.easeOut),
-    );
-
-    _slideAnimation =
-        Tween<Offset>(begin: const Offset(0.0, 0.08), end: Offset.zero).animate(
-      CurvedAnimation(parent: _entranceController, curve: Curves.easeOut),
-    );
-
-    // Start the entrance animation after a slight delay (atmosphere effect)
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        _entranceController.forward();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _entranceController.dispose();
-    super.dispose();
-  }
 
   Future<void> _handleGoogleSignIn() async {
     if (_isLoading) return;
@@ -61,11 +27,11 @@ class _LoginScreenState extends State<LoginScreen>
     });
 
     try {
-      // Pastikan Client ID Web yang digunakan untuk mengambil ID Token
+      // Client ID Web yang digunakan untuk mengambil ID Token
       const webClientId =
           '86620544451-qp7qh8s27svb37qevk7695nmhinl8c6r.apps.googleusercontent.com';
 
-      // Menggunakan pola singleton untuk google_sign_in 7.0.0+
+      // Inisialisasi Google Sign-In
       await GoogleSignIn.instance.initialize(
         serverClientId: webClientId,
       );
@@ -80,35 +46,64 @@ class _LoginScreenState extends State<LoginScreen>
         throw Exception('Gagal mendapatkan ID Token dari Google.');
       }
 
-      // Melakukan login ke Supabase dengan ID Token Google
-      await Supabase.instance.client.auth.signInWithIdToken(
+      // Autentikasi ke Supabase dengan ID Token Google
+      final authResponse = await Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
       );
+
+      final userEmail = authResponse.user?.email ?? googleUser.email;
+
+      // Pengecekan Whitelist: Pastikan email terdaftar di kader_terdaftar dan berstatus aktif
+      final validation = await KaderAuthService.validateKaderOnline(userEmail);
+
+      if (!validation.isAllowed) {
+        // Tolak akses: Sign out dari Supabase dan Google Sign-In
+        await Supabase.instance.client.auth.signOut();
+        try {
+          await GoogleSignIn.instance.signOut();
+        } catch (_) {}
+
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          KaderAccessDeniedSheet.show(
+            context,
+            email: userEmail,
+            message: validation.errorMessage ??
+                'Email Anda belum terdaftar sebagai kader. Hubungi admin Posyandu Sakura untuk pendaftaran.',
+          );
+        }
+        return;
+      }
 
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
 
-        // Tampilkan bottom sheet sukses
+        // Tampilkan modal sukses flat
         showModalBottomSheet(
           context: context,
           backgroundColor: Colors.transparent,
-          barrierColor: Colors.black.withValues(alpha: 0.12),
+          barrierColor: Colors.black.withValues(alpha: 0.25),
           isScrollControlled: true,
           builder: (context) => const _LoginSuccessSheet(),
         );
       }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
       debugPrint('Google Sign-In Error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Gagal masuk menggunakan Google. Silakan coba kembali.'),
+            content:
+                Text('Gagal masuk menggunakan Google. Silakan coba kembali.'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -119,907 +114,470 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.backgroundAlt,
-      body: Stack(
-        children: [
-          // 1. Mesh Gradient Background with dynamic drifting blobs
-          const Positioned.fill(
-            child: _BackgroundMesh(),
-          ),
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 16.0),
 
-          // 2. Main Login Content with entrance animation
-          Positioned.fill(
-            child: SafeArea(
-              child: FadeTransition(
-                opacity: _opacityAnimation,
-                child: SlideTransition(
-                  position: _slideAnimation,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      return SingleChildScrollView(
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: constraints.maxHeight,
-                          ),
-                          child: IntrinsicHeight(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20.0,
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Spacer(),
+            // Expanded Content (Superlist Minimalist Layout)
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 8),
 
-                                  // Centralized iOS-style premium card with glassmorphism
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 380,
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(28.0),
-                                      child: BackdropFilter(
-                                        filter: ui.ImageFilter.blur(
-                                            sigmaX: 16.0, sigmaY: 16.0),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 24.0, vertical: 36.0),
-                                          decoration: BoxDecoration(
-                                            color: AppColors.surfaceContainerLowest
-                                                .withValues(alpha: 0.75),
-                                            borderRadius:
-                                                BorderRadius.circular(28.0),
-                                            border: Border.all(
-                                              color: AppColors.borderSubtle
-                                                  .withValues(alpha: 0.5),
-                                              width: 1.5,
-                                            ),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.black
-                                                    .withValues(alpha: 0.03),
-                                                blurRadius: 32,
-                                                offset: const Offset(0, 8),
-                                              ),
-                                            ],
-                                          ),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              // Logo Section
-                                              _buildLogo(),
-                                              const SizedBox(height: 28.0),
+                    // 1. Transparent Healthcare Worker & Elderly Illustration (Seamlessly blending with background)
+                    SizedBox(
+                      width: 76,
+                      height: 76,
+                      child: Image.asset(
+                        'assets/images/Healthcare_worker_and_elderly_wo…_2K_202609080031.webp',
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Center(
+                            child: Icon(
+                              Icons.local_hospital_rounded,
+                              color: AppColors.primary,
+                              size: 36,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
 
-                                              // Typography Section
-                                              _buildWelcomeTypography(),
-                                              const SizedBox(height: 28.0),
+                    const SizedBox(height: 24),
 
-                                              // Action Section (Google button)
-                                              _buildGoogleButton(),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                    // 2. Large Display Headline (Superlist typography style)
+                    Text(
+                      'Selamat Datang\ndi Info Lansia',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 32,
+                        fontWeight: FontWeight.w800,
+                        height: 1.16,
+                        color: AppColors.textPrimary,
+                        letterSpacing: -0.8,
+                      ),
+                    ),
 
-                                  const Spacer(),
+                    const SizedBox(height: 32),
 
-                                  // Footer Section
-                                  _buildFooter(),
-                                  const SizedBox(height: 24.0),
-                                ],
-                              ),
+                    // 3. Themed Posyandu Sakura Doodles + Centered Tagline
+                    SizedBox(
+                      height: 160,
+                      width: double.infinity,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: _SakuraPosyanduDoodlesPainter(),
                             ),
                           ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 20.0),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Dibuat untuk kader.',
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 16.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary,
+                                    letterSpacing: -0.2,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Peduli kesehatan lansia.',
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 16.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textSecondary,
+                                    letterSpacing: -0.2,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+
+            // Bottom Action Area (Pinned to Bottom)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Sleek Full-Width Google Pill Button (Superlist style)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _handleGoogleSignIn,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor:
+                            AppColors.primary.withValues(alpha: 0.6),
+                        elevation: 0,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLogo() {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            colors: [
-              AppColors.primary.withValues(alpha: 0.15),
-              AppColors.primary.withValues(alpha: 0.0),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Container(
-          width: 80,
-          height: 80,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.08),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: Image.network(
-              'https://lh3.googleusercontent.com/aida/ADBb0uhjvhapHm24hoFRkZeTrgKXRyQfUDl1pRV9D-L8am18obb613Fg_MBdemLywPO593Qr6BgWchzZQkum1eiJEhWZwGtj_zZDyQoV_PZZIElCmY41yFRe1xseaCC2q5eWOPT4OpAwi_hCPWvRd6wNJFiJMBU5yoLCYzTMT7d66kmcTbeJXyP401RfF94-CiXxGFeypbK55iFmBVVAb5uCEWD2V-nMYJ2e3Z0_1LlQmu_Qbys0vFjBH1hY5t52',
-              fit: BoxFit.contain,
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return const Center(
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.0,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(AppColors.primary),
+                      ),
+                      child: _isLoading
+                          ? Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Menghubungkan...',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                // White circular container with Google Logo
+                                Container(
+                                  width: 26,
+                                  height: 26,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  padding: const EdgeInsets.all(4),
+                                  child: Image.network(
+                                    'https://developers.google.com/identity/images/g-logo.png',
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return const Icon(
+                                        Icons.g_mobiledata,
+                                        size: 18,
+                                        color: Colors.red,
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Lanjutkan dengan Google',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 15.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                    letterSpacing: 0.1,
+                                  ),
+                                ),
+                              ],
+                            ),
                     ),
                   ),
-                );
-              },
-              errorBuilder: (context, error, stackTrace) {
-                // Fallback beautiful medical cross if network image fails
-                return const Icon(
-                  Icons.local_hospital_rounded,
-                  size: 36,
-                  color: AppColors.primary,
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
-  Widget _buildWelcomeTypography() {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            'POSYANDU SAKURA',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.5,
-              color: AppColors.primary,
-            ),
-          ),
-        ),
-        const SizedBox(height: 16.0),
-        Text(
-          'Info Lansia',
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            height: 34 / 28,
-            color: AppColors.onSurface,
-            letterSpacing: -0.8,
-          ),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 8.0),
-        Text(
-          'Sistem informasi skrining dan pemantauan tren kesehatan lansia terintegrasi.',
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.normal,
-            height: 20 / 14,
-            color: AppColors.textSecondary,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    );
-  }
+                  const SizedBox(height: 12),
 
-  Widget _buildGoogleButton() {
-    return _SpringButton(
-      onTap: _handleGoogleSignIn,
-      isEnabled: !_isLoading,
-      borderRadius: 16.0,
-      child: Container(
-        height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16.0),
-          border: Border.all(
-            color: _isLoading
-                ? AppColors.borderSubtle
-                : AppColors.primary.withValues(alpha: 0.3),
-            width: 1.2,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (_isLoading) ...[
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.0,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-              const SizedBox(width: 12.0),
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    'Menghubungkan...',
+                  // Microcopy
+                  Text(
+                    'Khusus Kader & Tenaga Kesehatan Posyandu Sakura RW 06',
+                    textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.onSurfaceVariant,
+                      fontSize: 11.5,
+                      color: AppColors.textTertiary,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ),
+                ],
               ),
-            ] else ...[
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: Image.network(
-                  'https://developers.google.com/identity/images/g-logo.png',
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Icon(
-                      Icons.g_mobiledata,
-                      size: 24,
-                      color: Colors.red,
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 12.0),
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    'Lanjutkan dengan Google',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.onSurface,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ],
         ),
       ),
     );
   }
-
-  Widget _buildFooter() {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 280),
-      child: Text(
-        'Sistem informasi Posyandu Sakura mendukung pelayanan kesehatan masyarakat',
-        style: GoogleFonts.plusJakartaSans(
-          fontSize: 12,
-          fontWeight: FontWeight.normal,
-          height: 16 / 12,
-          color: AppColors.textSecondary,
-        ),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
 }
 
-// Custom widget to create soft radial mesh gradients
-class _BackgroundMesh extends StatefulWidget {
-  const _BackgroundMesh();
-
-  @override
-  State<_BackgroundMesh> createState() => _BackgroundMeshState();
-}
-
-class _BackgroundMeshState extends State<_BackgroundMesh>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 15),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    return Stack(
-      children: [
-        Container(color: AppColors.backgroundAlt),
-        AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            final angle = _controller.value * 2 * math.pi;
-            final dx1 = 60 * math.sin(angle);
-            final dy1 = 40 * math.cos(angle);
-            final dx2 = 50 * math.cos(angle + math.pi / 2);
-            final dy2 = 60 * math.sin(angle + math.pi / 2);
-            final dx3 = 40 * math.sin(angle * 2);
-            final dy3 = 45 * math.cos(angle * 2);
-
-            return Stack(
-              children: [
-                // Blob 1: Top Left - Primary Mint Green
-                Positioned(
-                  top: -150 + dy1,
-                  left: -150 + dx1,
-                  width: size.width * 0.9,
-                  height: size.width * 0.9,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.primary.withValues(alpha: 0.12),
-                    ),
-                  ),
-                ),
-                // Blob 2: Middle Right - Soft Emerald
-                Positioned(
-                  top: size.height * 0.25 + dy2,
-                  right: -180 + dx2,
-                  width: size.width * 0.8,
-                  height: size.width * 0.8,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.primaryContainer.withValues(alpha: 0.07),
-                    ),
-                  ),
-                ),
-                // Blob 3: Bottom Left - Pastel Teal
-                Positioned(
-                  bottom: -150 + dy3,
-                  left: -80 + dx3,
-                  width: size.width * 0.8,
-                  height: size.width * 0.8,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFF00B4D8).withValues(alpha: 0.06),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-        // High-intensity blur overlay
-        Positioned.fill(
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 90, sigmaY: 90),
-            child: Container(color: Colors.transparent),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// Spring animated button for premium iOS touch feel
-class _SpringButton extends StatefulWidget {
-  final Widget child;
-  final VoidCallback onTap;
-  final bool isEnabled;
-  final double borderRadius;
-
-  const _SpringButton({
-    required this.child,
-    required this.onTap,
-    this.isEnabled = true,
-    this.borderRadius = 16.0,
-  });
-
-  @override
-  State<_SpringButton> createState() => _SpringButtonState();
-}
-
-class _SpringButtonState extends State<_SpringButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _scaleController;
-  late final Animation<double> _scaleAnimation;
-  bool _isHovering = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _scaleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 150),
-      lowerBound: 0.95,
-      upperBound: 1.0,
-      value: 1.0,
-    );
-
-    _scaleAnimation = CurvedAnimation(
-      parent: _scaleController,
-      curve: Curves.easeInOut,
-    );
-  }
-
-  @override
-  void dispose() {
-    _scaleController.dispose();
-    super.dispose();
-  }
-
-  void _onTapDown(TapDownDetails details) {
-    if (widget.isEnabled) {
-      _scaleController.reverse(); // Scale down to 0.95
-    }
-  }
-
-  void _onTapUp(TapUpDetails details) {
-    if (widget.isEnabled) {
-      _scaleController.forward(); // Spring back to 1.0
-      widget.onTap();
-    }
-  }
-
-  void _onTapCancel() {
-    if (widget.isEnabled) {
-      _scaleController.forward();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: widget.isEnabled
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.forbidden,
-      onEnter: (_) => setState(() => _isHovering = true),
-      onExit: (_) => setState(() => _isHovering = false),
-      child: GestureDetector(
-        onTapDown: _onTapDown,
-        onTapUp: _onTapUp,
-        onTapCancel: _onTapCancel,
-        child: ScaleTransition(
-          scale: _scaleAnimation,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(widget.borderRadius),
-              boxShadow: _isHovering && widget.isEnabled
-                  ? [
-                      BoxShadow(
-                        color: AppColors.primary.withValues(alpha: 0.08),
-                        blurRadius: 16,
-                        spreadRadius: 2,
-                      )
-                    ]
-                  : [],
-            ),
-            child: widget.child,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// Custom animated success checkmark widget
-class _AnimatedSuccessCheckmark extends StatefulWidget {
-  final double size;
-  const _AnimatedSuccessCheckmark({this.size = 80});
-
-  @override
-  State<_AnimatedSuccessCheckmark> createState() =>
-      _AnimatedSuccessCheckmarkState();
-}
-
-class _AnimatedSuccessCheckmarkState extends State<_AnimatedSuccessCheckmark>
-    with TickerProviderStateMixin {
-  late final AnimationController _circleController;
-  late final AnimationController _checkController;
-  late final Animation<double> _circleScale;
-  late final Animation<double> _checkDraw;
-
-  @override
-  void initState() {
-    super.initState();
-    _circleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-    _checkController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
-
-    _circleScale = CurvedAnimation(
-      parent: _circleController,
-      curve: Curves.elasticOut,
-    );
-
-    _checkDraw = CurvedAnimation(
-      parent: _checkController,
-      curve: Curves.easeInOut,
-    );
-
-    // Play animations sequentially: circle scaling, then checkmark drawing
-    _circleController.forward().then((_) {
-      _checkController.forward();
-    });
-  }
-
-  @override
-  void dispose() {
-    _circleController.dispose();
-    _checkController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: widget.size,
-      height: widget.size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Outer pulsating ring
-          _PulseRing(size: widget.size),
-
-          // Inner circle scaling up with shadow
-          ScaleTransition(
-            scale: _circleScale,
-            child: Container(
-              width: widget.size * 0.75,
-              height: widget.size * 0.75,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: const LinearGradient(
-                  colors: [
-                    AppColors.primary,
-                    Color(0xFF00875A),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.25),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Custom checkmark drawing on top
-          ScaleTransition(
-            scale: _circleScale,
-            child: AnimatedBuilder(
-              animation: _checkDraw,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: Size(widget.size * 0.35, widget.size * 0.35),
-                  painter: _CheckmarkPainter(_checkDraw.value),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PulseRing extends StatefulWidget {
-  final double size;
-  const _PulseRing({required this.size});
-
-  @override
-  State<_PulseRing> createState() => _PulseRingState();
-}
-
-class _PulseRingState extends State<_PulseRing>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _opacity;
-  late final Animation<double> _scale;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1800),
-    )..repeat();
-
-    _opacity = Tween<double>(begin: 0.5, end: 0.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
-
-    _scale = Tween<double>(begin: 0.75, end: 1.35).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Opacity(
-          opacity: _opacity.value,
-          child: Transform.scale(
-            scale: _scale.value,
-            child: Container(
-              width: widget.size,
-              height: widget.size,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.4),
-                  width: 2.5,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _CheckmarkPainter extends CustomPainter {
-  final double progress;
-  _CheckmarkPainter(this.progress);
-
+// Hand-crafted delicate doodles tailored to the Posyandu Sakura theme
+class _SakuraPosyanduDoodlesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 4.5
+    // Soft Sage Green (Posyandu theme)
+    final greenPaint = Paint()
+      ..color = const Color(0xFFCCE2D5)
+      ..strokeWidth = 2.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
+    // Soft Sakura Blush Pink (Sakura theme)
+    final sakuraPaint = Paint()
+      ..color = const Color(0xFFECCED2)
+      ..strokeWidth = 2.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final w = size.width;
+    final h = size.height;
+
+    // 1. Left Upper: 5-Petal Sakura Blossom (Pink)
+    _drawSakuraFlower(canvas, Offset(w * 0.14, h * 0.30), sakuraPaint);
+
+    // 2. Left Lower: Caring Heart Outline (Green)
+    _drawHeart(canvas, Offset(w * 0.18, h * 0.74), 16, greenPaint);
+
+    // 3. Left Side: Floating Sakura Petal (Pink)
+    _drawPetal(canvas, Offset(w * 0.08, h * 0.58), -0.4, sakuraPaint);
+
+    // 4. Right Upper: Pulse Heartbeat ECG Line (Green)
+    _drawPulse(canvas, Offset(w * 0.68, h * 0.28), w * 0.24, greenPaint);
+
+    // 5. Right Lower: Medical Health Cross (Green)
+    _drawMedicalCross(canvas, Offset(w * 0.82, h * 0.74), 10, greenPaint);
+
+    // 6. Right Side: Health Capsule (Pink)
+    _drawCapsule(canvas, Offset(w * 0.90, h * 0.52), 0.5, sakuraPaint);
+
+    // 7. Subtle floating blossom dots
+    canvas.drawCircle(
+        Offset(w * 0.32, h * 0.18), 2.5, greenPaint..style = PaintingStyle.fill);
+    canvas.drawCircle(
+        Offset(w * 0.68, h * 0.78), 2.0, sakuraPaint..style = PaintingStyle.fill);
+    greenPaint.style = PaintingStyle.stroke;
+    sakuraPaint.style = PaintingStyle.stroke;
+  }
+
+  void _drawSakuraFlower(Canvas canvas, Offset center, Paint paint) {
     final path = Path();
-
-    final startX = size.width * 0.15;
-    final startY = size.height * 0.52;
-    final midX = size.width * 0.44;
-    final midY = size.height * 0.8;
-    final endX = size.width * 0.88;
-    final endY = size.height * 0.28;
-
-    path.moveTo(startX, startY);
-
-    if (progress <= 0.4) {
-      final segmentProgress = progress / 0.4;
-      final currentX = startX + (midX - startX) * segmentProgress;
-      final currentY = startY + (midY - startY) * segmentProgress;
-      path.lineTo(currentX, currentY);
-    } else {
-      path.lineTo(midX, midY);
-      final segmentProgress = (progress - 0.4) / 0.6;
-      final currentX = midX + (endX - midX) * segmentProgress;
-      final currentY = midY + (endY - midY) * segmentProgress;
-      path.lineTo(currentX, currentY);
+    const petals = 5;
+    const baseR = 10.0;
+    const depth = 5.0;
+    for (int i = 0; i <= 360; i += 6) {
+      final rad = i * math.pi / 180;
+      final r = baseR + depth * math.cos(petals * rad);
+      final x = center.dx + r * math.cos(rad);
+      final y = center.dy + r * math.sin(rad);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
     }
+    path.close();
+    canvas.drawPath(path, paint);
 
+    // Tiny pistil center
+    canvas.drawCircle(center, 1.8, paint..style = PaintingStyle.fill);
+    paint.style = PaintingStyle.stroke;
+  }
+
+  void _drawHeart(Canvas canvas, Offset center, double size, Paint paint) {
+    final path = Path();
+    final x = center.dx;
+    final y = center.dy;
+    path.moveTo(x, y + size * 0.2);
+    path.cubicTo(
+      x - size * 0.65,
+      y - size * 0.55,
+      x - size,
+      y + size * 0.15,
+      x,
+      y + size * 0.9,
+    );
+    path.cubicTo(
+      x + size,
+      y + size * 0.15,
+      x + size * 0.65,
+      y - size * 0.55,
+      x,
+      y + size * 0.2,
+    );
     canvas.drawPath(path, paint);
   }
 
-  @override
-  bool shouldRepaint(covariant _CheckmarkPainter oldDelegate) {
-    return oldDelegate.progress != progress;
+  void _drawPetal(Canvas canvas, Offset center, double angle, Paint paint) {
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final path = Path();
+    path.moveTo(0, -8);
+    path.cubicTo(-5, -4, -5, 4, 0, 8);
+    path.cubicTo(5, 4, 5, -4, 0, -8);
+    canvas.drawPath(path, paint);
+    canvas.restore();
   }
+
+  void _drawPulse(Canvas canvas, Offset start, double width, Paint paint) {
+    final path = Path();
+    final y = start.dy;
+    final x = start.dx;
+    path.moveTo(x, y);
+    path.lineTo(x + width * 0.20, y);
+    path.lineTo(x + width * 0.35, y - 13);
+    path.lineTo(x + width * 0.50, y + 15);
+    path.lineTo(x + width * 0.65, y - 5);
+    path.lineTo(x + width * 0.75, y);
+    path.lineTo(x + width, y);
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawMedicalCross(
+      Canvas canvas, Offset center, double radius, Paint paint) {
+    canvas.drawLine(
+      Offset(center.dx - radius, center.dy),
+      Offset(center.dx + radius, center.dy),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - radius),
+      Offset(center.dx, center.dy + radius),
+      paint,
+    );
+  }
+
+  void _drawCapsule(Canvas canvas, Offset center, double angle, Paint paint) {
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset.zero, width: 22, height: 10),
+      const Radius.circular(5.0),
+    );
+    canvas.drawRRect(rrect, paint);
+    canvas.drawLine(const Offset(0, -5.0), const Offset(0, 5.0), paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-// Success bottom sheet with premium staggered entrance animations
-class _LoginSuccessSheet extends StatefulWidget {
+// Flat, Clean Success Bottom Sheet (Zero Gradient, Zero Glow)
+class _LoginSuccessSheet extends StatelessWidget {
   const _LoginSuccessSheet();
-
-  @override
-  State<_LoginSuccessSheet> createState() => _LoginSuccessSheetState();
-}
-
-class _LoginSuccessSheetState extends State<_LoginSuccessSheet>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _sheetAnimationController;
-  late final Animation<double> _titleOpacity;
-  late final Animation<Offset> _titleSlide;
-  late final Animation<double> _subtitleOpacity;
-  late final Animation<Offset> _subtitleSlide;
-  late final Animation<double> _buttonOpacity;
-  late final Animation<Offset> _buttonSlide;
-
-  @override
-  void initState() {
-    super.initState();
-    _sheetAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
-
-    // Title animation: starts at 300ms, runs for 400ms
-    _titleOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.3, 0.7, curve: Curves.easeOut),
-      ),
-    );
-    _titleSlide =
-        Tween<Offset>(begin: const Offset(0.0, 0.3), end: Offset.zero).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.3, 0.7, curve: Curves.easeOutBack),
-      ),
-    );
-
-    // Subtitle animation: starts at 450ms, runs for 400ms
-    _subtitleOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.45, 0.85, curve: Curves.easeOut),
-      ),
-    );
-    _subtitleSlide =
-        Tween<Offset>(begin: const Offset(0.0, 0.3), end: Offset.zero).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.45, 0.85, curve: Curves.easeOutBack),
-      ),
-    );
-
-    // Button animation: starts at 600ms, runs for 400ms
-    _buttonOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.6, 1.0, curve: Curves.easeOut),
-      ),
-    );
-    _buttonSlide =
-        Tween<Offset>(begin: const Offset(0.0, 0.3), end: Offset.zero).animate(
-      CurvedAnimation(
-        parent: _sheetAnimationController,
-        curve: const Interval(0.6, 1.0, curve: Curves.easeOutBack),
-      ),
-    );
-
-    // Play sheet entrance animations after 200ms delay to let the modal fully slide up
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) {
-        _sheetAnimationController.forward();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _sheetAnimationController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28.0)),
-        boxShadow: [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.08),
-            blurRadius: 40,
-            offset: Offset(0, -8),
-          ),
-        ],
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24.0)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag handle
-          Container(
-            width: 36,
-            height: 5,
-            decoration: BoxDecoration(
-              color: AppColors.outlineVariant,
-              borderRadius: BorderRadius.circular(2.5),
+      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.outlineVariant,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          const SizedBox(height: 32.0),
+            const SizedBox(height: 24.0),
 
-          // Beautiful animated success checkmark
-          const _AnimatedSuccessCheckmark(size: 88),
-          const SizedBox(height: 24.0),
+            // Animated Lottie Success Indicator
+            SizedBox(
+              width: 88,
+              height: 88,
+              child: Lottie.asset(
+                'assets/success_animation.json',
+                frameRate: FrameRate.max,
+                repeat: false,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Lottie.asset(
+                    'assets/Succes.lottie',
+                    frameRate: FrameRate.max,
+                    repeat: false,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error2, stackTrace2) {
+                      return Container(
+                        width: 64,
+                        height: 64,
+                        decoration: const BoxDecoration(
+                          color: AppColors.secondaryContainer,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check_rounded,
+                          size: 36,
+                          color: AppColors.primary,
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14.0),
 
-          // Staggered Title
-          FadeTransition(
-            opacity: _titleOpacity,
-            child: SlideTransition(
-              position: _titleSlide,
+            // Title
+            Text(
+              'Autentikasi Berhasil',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+                letterSpacing: -0.3,
+              ),
+            ),
+            const SizedBox(height: 8.0),
+
+            // Subtitle
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0),
               child: Text(
-                'Autentikasi Berhasil',
+                'Selamat datang kembali! Akun Anda telah terverifikasi untuk mengakses rekam medis lansia.',
                 style: GoogleFonts.plusJakartaSans(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.onSurface,
-                  letterSpacing: -0.5,
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                  height: 1.4,
                 ),
+                textAlign: TextAlign.center,
               ),
             ),
-          ),
-          const SizedBox(height: 8.0),
+            const SizedBox(height: 24.0),
 
-          // Staggered Subtitle
-          FadeTransition(
-            opacity: _subtitleOpacity,
-            child: SlideTransition(
-              position: _subtitleSlide,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Text(
-                  'Selamat datang kembali! Anda berhasil masuk ke Info Lansia menggunakan Akun Google.',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 14,
-                    color: AppColors.textSecondary,
-                    height: 20 / 14,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 32.0),
-
-          // Staggered Dashboard Action Button
-          FadeTransition(
-            opacity: _buttonOpacity,
-            child: SlideTransition(
-              position: _buttonSlide,
-              child: _SpringButton(
-                borderRadius: 16.0,
-                onTap: () {
+            // Solid Primary CTA Button
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: () {
                   Navigator.pushAndRemoveUntil(
                     context,
                     MaterialPageRoute(
@@ -1027,42 +585,27 @@ class _LoginSuccessSheetState extends State<_LoginSuccessSheet>
                     (route) => false,
                   );
                 },
-                child: Container(
-                  width: double.infinity,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [
-                        AppColors.primary,
-                        Color(0xFF00875A),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(16.0),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.primary.withValues(alpha: 0.15),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.onPrimary,
+                  elevation: 0,
+                  shadowColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Center(
-                    child: Text(
-                      'Lanjutkan ke Dashboard',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
+                ),
+                child: Text(
+                  'Lanjutkan ke Dashboard',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 8.0),
+          ],
+        ),
       ),
     );
   }

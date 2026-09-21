@@ -63,9 +63,64 @@ class AppColors {
   static const Color onTertiaryFixed = Color(0xFF410005);
   static const Color onTertiaryFixedVariant = Color(0xFF7D2A2A);
 
+  static const Color textPrimary = Color(0xFF1B1B1D);
   static const Color textSecondary = Color(0xFF6E6E73);
+  static const Color textTertiary = Color(0xFF8E8E93);
   static const Color statusWarning = Color(0xFFD97706);
   static const Color iconInactive = Color(0xFF94A3B8);
+}
+
+class AppTypography {
+  AppTypography._();
+
+  /// display-number: 32px / 700, Plus Jakarta Sans
+  static TextStyle displayNumber({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 32,
+        fontWeight: FontWeight.w700,
+        height: 1.0,
+        color: color ?? AppColors.onSurface,
+      );
+
+  /// headline-lg: 24px / 700, Plus Jakarta Sans
+  static TextStyle headlineLg({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 24,
+        fontWeight: FontWeight.w700,
+        height: 32 / 24,
+        color: color ?? AppColors.onSurface,
+      );
+
+  /// headline-md: 20px / 600, Plus Jakarta Sans
+  static TextStyle headlineMd({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+        height: 28 / 20,
+        letterSpacing: -0.3,
+        color: color ?? AppColors.onSurface,
+      );
+
+  /// title-card: 16px / 600, Plus Jakarta Sans
+  static TextStyle titleCard({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        height: 24 / 16,
+        color: color ?? AppColors.onSurface,
+      );
+
+  /// body-default: 14px / 400, Plus Jakarta Sans
+  static TextStyle bodyDefault({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 14,
+        fontWeight: FontWeight.normal,
+        height: 20 / 14,
+        color: color ?? AppColors.onSurface,
+      );
+
+  /// label-md: 12px / 500, Plus Jakarta Sans
+  static TextStyle labelMd({Color? color}) => GoogleFonts.plusJakartaSans(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        height: 16 / 12,
+        color: color ?? AppColors.textSecondary,
+      );
 }
 
 class AppTheme {

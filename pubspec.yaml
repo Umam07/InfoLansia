@@ -1,7 +1,7 @@
 name: posyandu_sakura
 description: "A new Flutter project for Posyandu Sakura lansia screening."
 publish_to: 'none'
-version: 1.1.1+1
+version: 2.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -10,21 +10,36 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.1.0
-  cupertino_icons: ^1.0.6
   supabase_flutter: ^2.6.0
   google_sign_in: ^7.2.0
+  lottie: ^3.1.2
+  connectivity_plus: ^6.1.0
+  shared_preferences: ^2.3.0
+  drift: ^2.24.2
+  sqlite3_flutter_libs: ^0.5.28
+  path_provider: ^2.1.5
+  path: ^1.9.0
+  excel: ^4.0.6
+  file_picker: ^13.1.0
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
   flutter_launcher_icons: ^0.14.4
+  drift_dev: ^2.24.2
+  build_runner: ^2.4.13
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/success_animation.json
+    - assets/Succes.lottie
 
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
-  image_path: "Ikon Aplikasi.png"
+  image_path: "assets/icons/ikon_infolansia.png"
 

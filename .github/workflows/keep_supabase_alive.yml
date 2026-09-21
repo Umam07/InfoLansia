@@ -1,0 +1,27 @@
+name: Keep Supabase Active
+
+on:
+  schedule:
+    # Berjalan setiap 3 hari sekali pada jam 00:00 UTC (07:00 WIB)
+    # Jadwal ini jauh lebih aman daripada 6 hari untuk mencegah risiko inaktif 7 hari Supabase
+    - cron: '0 0 */3 * *'
+  workflow_dispatch: # Memungkinkan tombol 'Run workflow' manual di GitHub Actions
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          echo "Mengirim request ping ke Supabase REST API..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X GET "https://jbhjqrqjufmuludazqez.supabase.co/rest/v1/patients?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          
+          echo "Status HTTP Response: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "Berhasil! Supabase aktif dan merespons dengan baik."
+          else
+            echo "Peringatan: Response HTTP bernilai $HTTP_STATUS"
+          fi

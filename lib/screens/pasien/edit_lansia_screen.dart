@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:drift/drift.dart' as drift;
+
 import '../../theme.dart';
+import '../../widgets/app_toast.dart';
+import '../../database/app_database.dart';
+import '../../services/sync_service.dart';
 
 class EditLansiaScreen extends StatefulWidget {
+
   final String? id;
   final int index;
   final String initialName;
@@ -53,7 +58,7 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     super.initState();
     _nameController = TextEditingController(text: widget.initialName);
     _selectedDate = widget.initialBirthDate;
-    _dateController = TextEditingController(text: _formatDisplayDate(_selectedDate));
+    _dateController = TextEditingController(text: _formatDate(_selectedDate));
     _addressController = TextEditingController(text: widget.initialAddress);
     _gender = widget.initialGender;
     _lastUpdatedDate = widget.createdAt ?? DateTime.now();
@@ -67,12 +72,13 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     super.dispose();
   }
 
-  // Indonesian Date Formatter for text display
-  String _formatDisplayDate(DateTime date) {
-    // Show in dd/mm/yyyy format as in mockup screen
-    String day = date.day.toString().padLeft(2, '0');
-    String month = date.month.toString().padLeft(2, '0');
-    return '$day/$month/${date.year}';
+  // Indonesian Date Formatter
+  String _formatDate(DateTime date) {
+    final List<String> months = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
   String _formatLastUpdatedDate(DateTime date) {
@@ -83,8 +89,29 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
-  // Date Picker Trigger
+  int get _calculatedAge {
+    final now = DateTime.now();
+    int age = now.year - _selectedDate.year;
+    if (now.month < _selectedDate.month ||
+        (now.month == _selectedDate.month && now.day < _selectedDate.day)) {
+      age--;
+    }
+    return age;
+  }
+
+  String _getInitials(String name) {
+    if (name.isEmpty) return 'P';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length > 1) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return parts[0][0].toUpperCase();
+  }
+
+  // Date Picker Handler
   Future<void> _selectDate(BuildContext context) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     final DateTime? picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
@@ -96,11 +123,14 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
             colorScheme: const ColorScheme.light(
               primary: AppColors.primary,
               onPrimary: Colors.white,
-              onSurface: AppColors.onSurface,
+              onSurface: AppColors.textPrimary,
             ),
             textButtonTheme: TextButtonThemeData(
               style: TextButton.styleFrom(
                 foregroundColor: AppColors.primary,
+                textStyle: GoogleFonts.plusJakartaSans(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ),
@@ -111,49 +141,94 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     if (picked != null && picked != _selectedDate) {
       setState(() {
         _selectedDate = picked;
-        _dateController.text = _formatDisplayDate(picked);
+        _dateController.text = _formatDate(picked);
       });
     }
   }
 
   // Submit Handler
   void _handleSubmit() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     if (_formKey.currentState!.validate()) {
       setState(() {
         _isLoading = true;
       });
 
       try {
+        final birthDateStr = _selectedDate.toIso8601String().split('T').first;
+        final nameStr = _nameController.text.trim();
+        final addressStr = _addressController.text.trim();
+
+        // Cek duplikasi dengan pasien lain (excludeId: widget.id)
+        final duplicate = await AppDatabase.instance.findDuplicatePatient(
+          name: nameStr,
+          birthDate: birthDateStr,
+          gender: _gender,
+          excludeId: widget.id,
+        );
+
+        if (duplicate != null) {
+          setState(() {
+            _isLoading = false;
+          });
+          if (mounted) {
+            AppToast.show(
+              context: context,
+              message: 'Gagal mengubah: Data lansia lain dengan nama, tanggal lahir, dan jenis kelamin tersebut sudah ada.',
+              type: AppToastType.warning,
+            );
+          }
+          return;
+        }
+
+        final now = DateTime.now();
+
         if (widget.id != null) {
-          await Supabase.instance.client
-              .from('patients')
-              .update({
-                'name': _nameController.text,
-                'gender': _gender,
-                'birth_date': _selectedDate.toIso8601String().split('T').first,
-                'address': _addressController.text,
-              })
-              .eq('id', widget.id!);
+          // 1. Simpan ke database lokal Drift terlebih dahulu
+          await AppDatabase.instance.upsertPatient(
+            LocalPatientsCompanion(
+              id: drift.Value(widget.id!),
+              name: drift.Value(nameStr),
+              gender: drift.Value(_gender),
+              birthDate: drift.Value(birthDateStr),
+              address: drift.Value(addressStr),
+              category: const drift.Value('Rutin'),
+              isSynced: const drift.Value(false),
+              syncAction: const drift.Value('update'),
+              updatedAt: drift.Value(now),
+              createdAt: drift.Value(widget.createdAt ?? now),
+            ),
+          );
+
+          // 2. Picu sinkronisasi di latar belakang
+          SyncService.instance.syncAll();
         }
 
         setState(() {
           _isLoading = false;
           _isSuccess = true;
-          _lastUpdatedDate = DateTime.now();
+          _lastUpdatedDate = now;
         });
 
-        // After success label delay (1 second), pop back with updated data
-        Future.delayed(const Duration(milliseconds: 1000), () {
+
+        if (mounted) {
+          AppToast.show(
+            context: context,
+            message: 'Data ${_nameController.text.trim()} berhasil diperbarui',
+            type: AppToastType.success,
+          );
+        }
+
+        Future.delayed(const Duration(milliseconds: 500), () {
           if (!mounted) return;
-          final age = (DateTime.now().difference(_selectedDate).inDays / 365).floor().toString();
-          
           final updatedPatient = {
-            'name': _nameController.text,
-            'age': age,
-            'address': _addressController.text,
+            'name': _nameController.text.trim(),
+            'age': _calculatedAge.toString(),
+            'address': _addressController.text.trim(),
             'gender': _gender,
             'birthDate': _selectedDate,
-            'category': 'Rutin',
+            'category': '',
             'avatarBg': widget.avatarBg ?? AppColors.secondaryContainer,
             'avatarColor': widget.avatarColor ?? AppColors.primary,
             'createdAt': _lastUpdatedDate,
@@ -162,15 +237,15 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
           Navigator.pop(context, updatedPatient);
         });
       } catch (e) {
+        debugPrint('[EditLansia] Gagal memperbarui data lansia: $e');
         setState(() {
           _isLoading = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Gagal memperbarui data: $e'),
-              backgroundColor: AppColors.error,
-            ),
+          AppToast.show(
+            context: context,
+            message: 'Gagal memperbarui data lansia. Silakan coba lagi atau hubungi petugas teknis.',
+            type: AppToastType.error,
           );
         }
       }
@@ -179,119 +254,83 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundAlt,
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(64.0),
-        child: _buildAppBar(context),
-      ),
-      body: Stack(
-        children: [
-          // Scrollable Form Content
-          Positioned.fill(
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: EdgeInsets.only(
-                  left: 20.0,
-                  right: 20.0,
-                  top: 24.0,
-                  bottom: 120.0 + MediaQuery.of(context).padding.bottom,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Profile Overview Card
-                    _buildProfileOverviewCard(),
-                    const SizedBox(height: 24.0),
+    final isMale = _gender == 'Laki-laki';
 
-                    // Inputs Card Container
-                    Container(
-                      padding: const EdgeInsets.all(20.0),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16.0),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color.fromRGBO(0, 0, 0, 0.04),
-                            blurRadius: 24,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                        border: Border.all(
-                          color: AppColors.borderSubtle,
-                          width: 1.0,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Nama Lengkap Input
-                          _buildSectionLabel('Nama Lengkap'),
-                          const SizedBox(height: 6.0),
-                          _buildNameField(),
-                          const SizedBox(height: 20.0),
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      },
+      child: GestureDetector(
+        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+        behavior: HitTestBehavior.translucent,
+        child: Scaffold(
+          backgroundColor: AppColors.backgroundAlt,
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(64.0),
+            child: _buildAppBar(context),
+          ),
+          body: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: ClampingScrollPhysics(),
+              ),
+              padding: EdgeInsets.only(
+                left: 20.0,
+                right: 20.0,
+                top: 20.0,
+                bottom: 32.0 + MediaQuery.of(context).padding.bottom,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Profile Summary Card
+                  _buildProfileOverviewCard(isMale),
+                  const SizedBox(height: 18.0),
 
-                          // Jenis Kelamin Option
-                          _buildSectionLabel('Jenis Kelamin'),
-                          const SizedBox(height: 6.0),
-                          _buildGenderSelector(),
-                          const SizedBox(height: 20.0),
+                  // Bento Card 1: Identitas Lansia
+                  _buildIdentityCard(context, isMale),
+                  const SizedBox(height: 18.0),
 
-                          // Tanggal Lahir Option
-                          _buildSectionLabel('Tanggal Lahir'),
-                          const SizedBox(height: 6.0),
-                          _buildDateField(context),
-                          const SizedBox(height: 20.0),
+                  // Bento Card 2: Alamat Domisili
+                  _buildAddressCard(),
+                  const SizedBox(height: 14.0),
 
-                          // Alamat Option
-                          _buildSectionLabel('Alamat'),
-                          const SizedBox(height: 6.0),
-                          _buildAddressField(),
-                        ],
+                  // Last updated timestamp
+                  Center(
+                    child: Text(
+                      'Terakhir diperbarui: ${_formatLastUpdatedDate(_lastUpdatedDate)}',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 24.0),
+                  ),
+                  const SizedBox(height: 24.0),
 
-                    // Submit Button & Caption
-                    _buildSubmitButton(),
-                    const SizedBox(height: 8.0),
-                    Center(
-                      child: Text(
-                        'Terakhir diperbarui: ${_formatLastUpdatedDate(_lastUpdatedDate)}',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  // Primary CTA Button
+                  _buildSubmitButton(),
+                ],
               ),
             ),
           ),
-
-          // Shared Bottom Navigation Bar (Mocked for design accuracy)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomNavBar(),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  // Header App Bar matching design mock exactly
+  // Top App Bar
   Widget _buildAppBar(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
         border: Border(
           bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
+            color: AppColors.borderSubtle.withValues(alpha: 0.6),
             width: 1.0,
           ),
         ),
@@ -299,37 +338,60 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
       child: SafeArea(
         child: Container(
           height: 64.0,
-          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _SpringButton(
                 onTap: () => Navigator.pop(context),
                 child: Container(
                   width: 40,
                   height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
+                  ),
                   alignment: Alignment.center,
                   child: const Icon(
-                    Icons.arrow_back_ios_rounded,
-                    color: AppColors.primary,
-                    size: 24.0,
+                    Icons.arrow_back_rounded,
+                    color: AppColors.textPrimary,
+                    size: 20.0,
                   ),
                 ),
               ),
+              const SizedBox(width: 16.0),
               Expanded(
-                child: Text(
-                  'Edit Data Lansia',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Edit Data Lansia',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary,
+                        letterSpacing: -0.3,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    Text(
+                      'Pembaruan Informasi Pasien RW 06',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 40.0), // Spacer for centering
             ],
           ),
         ),
@@ -338,61 +400,77 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
   }
 
   // Profile Overview Card
-  Widget _buildProfileOverviewCard() {
+  Widget _buildProfileOverviewCard(bool isMale) {
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16.0),
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle,
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
           width: 1.0,
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Row(
         children: [
-          // Profile Photo
           Container(
-            width: 64,
-            height: 64,
+            width: 56,
+            height: 56,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: _gender == 'Laki-laki' 
-                  ? const Color(0x1BBA5855) 
-                  : AppColors.secondaryContainer,
+              color: isMale
+                  ? AppColors.tertiary.withValues(alpha: 0.12)
+                  : AppColors.primary.withValues(alpha: 0.12),
+              border: Border.all(
+                color: (isMale ? AppColors.tertiary : AppColors.primary)
+                    .withValues(alpha: 0.25),
+                width: 2.0,
+              ),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(32.0),
-              child: _buildInitialsAvatar(),
+            child: Center(
+              child: Text(
+                _getInitials(_nameController.text.isNotEmpty
+                    ? _nameController.text
+                    : widget.initialName),
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: isMale ? AppColors.tertiary : AppColors.primary,
+                ),
+              ),
             ),
           ),
-          const SizedBox(width: 16.0),
-          // Name details
+          const SizedBox(width: 14.0),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.initialName,
+                  _nameController.text.isNotEmpty
+                      ? _nameController.text
+                      : widget.initialName,
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.onSurface,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.2,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4.0),
+                const SizedBox(height: 3.0),
                 Text(
-                  'Pasien Terdaftar',
+                  '$_calculatedAge Tahun • $_gender',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
                     color: AppColors.textSecondary,
                   ),
                 ),
@@ -404,35 +482,140 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     );
   }
 
-  Widget _buildInitialsAvatar() {
-    final initials = widget.initialName.isNotEmpty
-        ? widget.initialName.split(' ').map((e) => e[0]).take(2).join('').toUpperCase()
-        : 'P';
-    return Center(
-      child: Text(
-        initials,
-        style: GoogleFonts.plusJakartaSans(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: _gender == 'Laki-laki' 
-              ? AppColors.tertiary 
-              : AppColors.primary,
+  // Bento Card 1: Identitas Lansia
+  Widget _buildIdentityCard(BuildContext context, bool isMale) {
+    return Container(
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20.0),
+        border: Border.all(
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
+          width: 1.0,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildCardHeader('Identitas Warga Lansia'),
+          const SizedBox(height: 18.0),
+
+          // 1. Nama Lengkap Field
+          _buildFieldLabel('Nama Lengkap'),
+          const SizedBox(height: 8.0),
+          _buildNameField(),
+          const SizedBox(height: 18.0),
+
+          // 2. Jenis Kelamin Selector
+          _buildFieldLabel('Jenis Kelamin'),
+          const SizedBox(height: 8.0),
+          _buildGenderSelector(isMale),
+          const SizedBox(height: 18.0),
+
+          // 3. Tanggal Lahir Field
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildFieldLabel('Tanggal Lahir'),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6.0),
+                ),
+                child: Text(
+                  '$_calculatedAge Tahun',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8.0),
+          _buildDateField(context),
+        ],
       ),
     );
   }
 
-  // Section Labels matching designs
-  Widget _buildSectionLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4.0),
-      child: Text(
-        label,
-        style: GoogleFonts.plusJakartaSans(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: AppColors.onSurface,
+  // Bento Card 2: Alamat Domisili
+  Widget _buildAddressCard() {
+    return Container(
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20.0),
+        border: Border.all(
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
+          width: 1.0,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildCardHeader('Alamat Tempat Tinggal'),
+          const SizedBox(height: 18.0),
+
+          // 4. Alamat Lengkap Field
+          _buildFieldLabel('Alamat Lengkap Domisili'),
+          const SizedBox(height: 8.0),
+          _buildAddressField(),
+        ],
+      ),
+    );
+  }
+
+  // Card Header with vertical accent
+  Widget _buildCardHeader(String title) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            color: AppColors.primary,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 15.5,
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+            letterSpacing: -0.2,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFieldLabel(String label) {
+    return Text(
+      label,
+      style: GoogleFonts.plusJakartaSans(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        color: AppColors.textPrimary,
       ),
     );
   }
@@ -441,103 +624,120 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
   Widget _buildNameField() {
     return TextFormField(
       controller: _nameController,
+      textCapitalization: TextCapitalization.words,
+      onChanged: (_) => setState(() {}),
       style: GoogleFonts.plusJakartaSans(
         fontSize: 14,
-        fontWeight: FontWeight.w500,
-        color: AppColors.onSurface,
+        fontWeight: FontWeight.w600,
+        color: AppColors.textPrimary,
       ),
       decoration: _buildInputDecoration(
         hint: 'Masukkan nama lengkap',
+        prefixIcon: Icons.person_outline_rounded,
       ),
       validator: (value) {
         if (value == null || value.trim().isEmpty) {
           return 'Nama lengkap wajib diisi';
+        }
+        if (value.trim().length < 3) {
+          return 'Nama minimal 3 karakter';
         }
         return null;
       },
     );
   }
 
-  // Custom Active-Border Gender selector
-  Widget _buildGenderSelector() {
-    return Row(
-      children: [
-        // Perempuan Option
-        Expanded(
-          child: GestureDetector(
-            onTap: () {
-              setState(() {
-                _gender = 'Perempuan';
-              });
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              height: 48,
-              decoration: BoxDecoration(
-                color: _gender == 'Perempuan'
-                    ? AppColors.primary.withValues(alpha: 0.05)
-                    : AppColors.surface,
-                borderRadius: BorderRadius.circular(12.0),
-                border: Border.all(
-                  color: _gender == 'Perempuan'
-                      ? AppColors.primary
-                      : AppColors.borderSubtle,
-                  width: _gender == 'Perempuan' ? 2.0 : 1.0,
+  // Segmented Gender Selector (Zero Glow, Clean Active State)
+  Widget _buildGenderSelector(bool isMale) {
+    return Container(
+      height: 48.0,
+      padding: const EdgeInsets.all(4.0),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
+      ),
+      child: Row(
+        children: [
+          // Laki-laki
+          Expanded(
+            child: _SpringButton(
+              onTap: () {
+                setState(() {
+                  _gender = 'Laki-laki';
+                });
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isMale ? AppColors.tertiary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10.0),
                 ),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                'Perempuan',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 14.0,
-                  fontWeight: _gender == 'Perempuan' ? FontWeight.bold : FontWeight.normal,
-                  color: _gender == 'Perempuan'
-                      ? AppColors.primary
-                      : AppColors.textSecondary,
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.male_rounded,
+                      size: 18,
+                      color: isMale ? Colors.white : AppColors.textSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Laki-laki',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13.5,
+                        fontWeight: isMale ? FontWeight.w700 : FontWeight.w600,
+                        color: isMale ? Colors.white : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-        ),
-        const SizedBox(width: 12.0),
-        // Laki-laki Option
-        Expanded(
-          child: GestureDetector(
-            onTap: () {
-              setState(() {
-                _gender = 'Laki-laki';
-              });
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              height: 48,
-              decoration: BoxDecoration(
-                color: _gender == 'Laki-laki'
-                    ? AppColors.primary.withValues(alpha: 0.05)
-                    : AppColors.surface,
-                borderRadius: BorderRadius.circular(12.0),
-                border: Border.all(
-                  color: _gender == 'Laki-laki'
-                      ? AppColors.primary
-                      : AppColors.borderSubtle,
-                  width: _gender == 'Laki-laki' ? 2.0 : 1.0,
+          const SizedBox(width: 4.0),
+
+          // Perempuan
+          Expanded(
+            child: _SpringButton(
+              onTap: () {
+                setState(() {
+                  _gender = 'Perempuan';
+                });
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: !isMale ? AppColors.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10.0),
                 ),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                'Laki-laki',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 14.0,
-                  fontWeight: _gender == 'Laki-laki' ? FontWeight.bold : FontWeight.normal,
-                  color: _gender == 'Laki-laki'
-                      ? AppColors.primary
-                      : AppColors.textSecondary,
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.female_rounded,
+                      size: 18,
+                      color: !isMale ? Colors.white : AppColors.textSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Perempuan',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13.5,
+                        fontWeight: !isMale ? FontWeight.w700 : FontWeight.w600,
+                        color: !isMale ? Colors.white : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -550,17 +750,13 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
         enabled: false,
         style: GoogleFonts.plusJakartaSans(
           fontSize: 14,
-          fontWeight: FontWeight.w500,
-          color: AppColors.onSurface,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
         ),
         decoration: _buildInputDecoration(
-          hint: 'dd/mm/yyyy',
-        ).copyWith(
-          suffixIcon: const Icon(
-            Icons.calendar_today_rounded,
-            color: AppColors.outline,
-            size: 20.0,
-          ),
+          hint: 'Pilih tanggal lahir',
+          prefixIcon: Icons.cake_outlined,
+          suffixIcon: Icons.calendar_month_rounded,
         ),
         validator: (value) {
           if (_dateController.text.isEmpty) {
@@ -572,18 +768,21 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     );
   }
 
-  // Alamat Field
+  // Alamat Lengkap Field
   Widget _buildAddressField() {
     return TextFormField(
       controller: _addressController,
-      maxLines: 4,
+      maxLines: 3,
       style: GoogleFonts.plusJakartaSans(
         fontSize: 14,
         fontWeight: FontWeight.w500,
-        color: AppColors.onSurface,
+        color: AppColors.textPrimary,
+        height: 1.4,
       ),
       decoration: _buildInputDecoration(
-        hint: 'Masukkan alamat lengkap',
+        hint: 'Masukkan alamat lengkap domisili',
+        prefixIcon: Icons.location_on_outlined,
+        isDenseMultiLine: true,
       ),
       validator: (value) {
         if (value == null || value.trim().isEmpty) {
@@ -594,236 +793,141 @@ class _EditLansiaScreenState extends State<EditLansiaScreen> {
     );
   }
 
-  // Animated Submit Button matching design
+  // Primary CTA Button (Strict Squircle, height: 52, zero glow, zero gradient)
   Widget _buildSubmitButton() {
-    Color btnColor = AppColors.primary;
-    if (_isSuccess) {
-      btnColor = const Color(0xFF16A34A); // bg-green-600
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: _SpringButton(
-        onTap: _isLoading || _isSuccess ? () {} : _handleSubmit,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          width: double.infinity,
-          height: 56.0,
-          decoration: BoxDecoration(
-            color: btnColor,
-            borderRadius: BorderRadius.circular(12.0),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 24,
-                offset: const Offset(0, 4),
-              ),
-            ],
+    return SizedBox(
+      height: 52.0,
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _isLoading || _isSuccess ? null : _handleSubmit,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.7),
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
           ),
-          alignment: Alignment.center,
-          child: _isLoading
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const SizedBox(
-                      width: 20.0,
-                      height: 20.0,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2.5,
-                      ),
-                    ),
-                    const SizedBox(width: 12.0),
-                    Text(
-                      'Menyimpan...',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      _isSuccess ? Icons.check_circle_rounded : Icons.save_rounded,
-                      color: Colors.white,
-                      size: 20.0,
-                    ),
-                    const SizedBox(width: 8.0),
-                    Text(
-                      _isSuccess ? 'Berhasil Disimpan' : 'Simpan Perubahan',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
         ),
+        child: _isLoading
+            ? const SizedBox(
+                width: 22.0,
+                height: 22.0,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2.4,
+                ),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _isSuccess ? Icons.check_circle_rounded : Icons.save_rounded,
+                    size: 20,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 8.0),
+                  Text(
+                    _isSuccess ? 'Perubahan Tersimpan' : 'Simpan Perubahan',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
 
-  // Premium Custom Input Decoration
-  InputDecoration _buildInputDecoration({required String hint}) {
+  // Premium Input Decoration
+  InputDecoration _buildInputDecoration({
+    required String hint,
+    IconData? prefixIcon,
+    IconData? suffixIcon,
+    bool isDenseMultiLine = false,
+  }) {
     return InputDecoration(
       hintText: hint,
       hintStyle: GoogleFonts.plusJakartaSans(
-        color: AppColors.outline.withValues(alpha: 0.6),
-        fontSize: 14.0,
+        color: AppColors.outline.withValues(alpha: 0.7),
+        fontSize: 13.5,
+        fontWeight: FontWeight.w500,
       ),
+      prefixIcon: prefixIcon != null
+          ? Padding(
+              padding: EdgeInsets.only(
+                left: 14.0,
+                right: 10.0,
+                top: isDenseMultiLine ? 14.0 : 0.0,
+              ),
+              child: Align(
+                alignment:
+                    isDenseMultiLine ? Alignment.topCenter : Alignment.center,
+                widthFactor: 1.0,
+                child: Icon(
+                  prefixIcon,
+                  color: AppColors.primary,
+                  size: 20.0,
+                ),
+              ),
+            )
+          : null,
+      suffixIcon: suffixIcon != null
+          ? Padding(
+              padding: const EdgeInsets.only(right: 14.0),
+              child: Icon(
+                suffixIcon,
+                color: AppColors.outline,
+                size: 20.0,
+              ),
+            )
+          : null,
       filled: true,
-      fillColor: AppColors.surface,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+      fillColor: AppColors.surfaceContainerLow,
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
-        borderSide: const BorderSide(
-          color: AppColors.borderSubtle,
+        borderRadius: BorderRadius.circular(14.0),
+        borderSide: BorderSide(
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
           width: 1.0,
         ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.primary,
           width: 1.5,
         ),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.error,
           width: 1.0,
         ),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.error,
           width: 1.5,
         ),
       ),
-    );
-  }
-
-  // Bottom Navigation Bar matching screenshot design
-  Widget _buildBottomNavBar() {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    return Container(
-      height: 80.0 + bottomPadding,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-        border: Border(
-          top: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.4),
-            width: 1.0,
-          ),
-        ),
-      ),
-      padding: EdgeInsets.only(
-        bottom: bottomPadding,
-        left: 16.0,
-        right: 16.0,
-      ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavBarItem(
-                index: 0,
-                icon: Icons.grid_view_rounded,
-                label: 'Dashboard',
-              ),
-              _buildNavBarItem(
-                index: 1,
-                icon: Icons.medical_services_outlined,
-                label: 'Layanan',
-              ),
-              _buildNavBarItem(
-                index: 2,
-                icon: Icons.assignment_turned_in_outlined,
-                label: 'Skrining',
-              ),
-              _buildNavBarItem(
-                index: 3,
-                icon: Icons.groups_outlined,
-                label: 'Pasien',
-                isActive: true,
-              ),
-              _buildNavBarItem(
-                index: 4,
-                icon: Icons.person_outline_rounded,
-                label: 'Profil',
-              ),
-            ],
-      ),
-    );
-  }
-
-  Widget _buildNavBarItem({
-    required int index,
-    required IconData icon,
-    required String label,
-    bool isActive = false,
-  }) {
-    return Expanded(
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () {
-            if (!isActive) {
-              Navigator.pop(context);
-            }
-          },
-          behavior: HitTestBehavior.opaque,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 48,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? AppColors.primary.withValues(alpha: 0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16.0),
-                ),
-                child: Icon(
-                  icon,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(height: 4.0),
-              AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 200),
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                  color: isActive ? AppColors.primary : AppColors.iconInactive,
-                ),
-                child: Text(label),
-              ),
-            ],
-          ),
+      disabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14.0),
+        borderSide: BorderSide(
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
+          width: 1.0,
         ),
       ),
     );
   }
 }
 
-// Spring Button custom implementation
+// Spring Button
 class _SpringButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
@@ -837,7 +941,8 @@ class _SpringButton extends StatefulWidget {
   State<_SpringButton> createState() => _SpringButtonState();
 }
 
-class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderStateMixin {
+class _SpringButtonState extends State<_SpringButton>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _scale;
 

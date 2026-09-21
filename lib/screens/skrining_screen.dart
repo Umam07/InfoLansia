@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
+
 import 'skrining/skrining_baru_screen.dart';
 import 'pasien/detail_pasien_screen.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/app_pull_to_refresh.dart';
+import '../widgets/sync_status_banner.dart';
+import '../widgets/sync_status_badge.dart';
+import '../database/app_database.dart';
+import '../services/sync_service.dart';
+import '../services/network_connectivity_service.dart';
 
 class SkriningScreen extends StatefulWidget {
   const SkriningScreen({super.key});
@@ -15,14 +21,9 @@ class SkriningScreen extends StatefulWidget {
 
 class _SkriningScreenState extends State<SkriningScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
   String _selectedCategory = 'Semua';
-
-  final List<String> _categories = [
-    'Semua',
-    'Belum Skrining',
-    'Sudah Skrining',
-  ];
 
   List<Map<String, dynamic>> _allPatients = [];
   bool _isLoading = true;
@@ -33,82 +34,103 @@ class _SkriningScreenState extends State<SkriningScreen> {
     _fetchPatients();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
   Future<void> _fetchPatients() async {
     if (!mounted) return;
     setState(() {
-      _isLoading = true;
+      _isLoading = _allPatients.isEmpty;
     });
+
     try {
-      final patientResponse = await Supabase.instance.client
-          .from('patients')
-          .select()
-          .order('name', ascending: true);
+      // 1. Ambil data lokal terlebih dahulu untuk render instan
+      final localPatients = await AppDatabase.instance.getAllPatients();
+      final localScreenings = await AppDatabase.instance.getAllScreenings();
+      if (localPatients.isNotEmpty) {
+        _populateFromLocal(localPatients, localScreenings);
+      }
 
-      final List<Map<String, dynamic>> patients = List<Map<String, dynamic>>.from(patientResponse);
+      // 2. Jika online, jalankan sinkronisasi
+      if (NetworkConnectivityService.instance.isOnline.value) {
+        await SyncService.instance.syncAll();
+        final freshPatients = await AppDatabase.instance.getAllPatients();
+        final freshScreenings = await AppDatabase.instance.getAllScreenings();
+        _populateFromLocal(freshPatients, freshScreenings);
+      } else {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      final fallbackPatients = await AppDatabase.instance.getAllPatients();
+      final fallbackScreenings = await AppDatabase.instance.getAllScreenings();
+      if (fallbackPatients.isNotEmpty) {
+        _populateFromLocal(fallbackPatients, fallbackScreenings);
+      } else if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
-      final screeningResponse = await Supabase.instance.client
-          .from('screenings')
-          .select('patient_id, date');
-
-      final List<Map<String, dynamic>> screenings = List<Map<String, dynamic>>.from(screeningResponse);
-
-      final Map<String, List<DateTime>> screeningMap = {};
-      for (final s in screenings) {
-        final pid = s['patient_id'] as String;
-        final dateStr = s['date'] as String;
-        final date = DateTime.parse(dateStr);
+  void _populateFromLocal(List<LocalPatient> patients, List<LocalScreening> screenings) {
+    final Map<String, List<DateTime>> screeningMap = {};
+    for (final s in screenings) {
+      final pid = s.patientId;
+      try {
+        final date = DateTime.parse(s.date);
         if (!screeningMap.containsKey(pid)) {
           screeningMap[pid] = [];
         }
         screeningMap[pid]!.add(date);
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _allPatients = patients.map((patient) {
-          final pid = patient['id'] as String;
-          final birthDateStr = patient['birth_date'] as String;
-          final birthDate = DateTime.parse(birthDateStr);
-          final age = (DateTime.now().difference(birthDate).inDays / 365).floor().toString();
-          final gender = patient['gender'] as String;
-
-          return {
-            'id': pid,
-            'name': patient['name'] as String,
-            'age': age,
-            'address': patient['address'] as String,
-            'gender': gender,
-            'birthDate': birthDate,
-            'category': patient['category'] ?? 'Rutin',
-            'avatarBg': gender == 'Laki-laki'
-                ? const Color(0x1BBA5855)
-                : AppColors.secondaryContainer,
-            'avatarColor': gender == 'Laki-laki'
-                ? AppColors.tertiary
-                : AppColors.primary,
-            'screenings': screeningMap[pid] ?? <DateTime>[],
-          };
-        }).toList();
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-      });
-      AppToast.show(
-        context: context,
-        message: 'Gagal memuat data skrining: $e',
-        type: AppToastType.error,
-      );
+      } catch (_) {}
     }
+
+    if (!mounted) return;
+    setState(() {
+      _allPatients = patients.map((patient) {
+        final pid = patient.id;
+        DateTime birthDate;
+        try {
+          birthDate = DateTime.parse(patient.birthDate);
+        } catch (_) {
+          birthDate = DateTime.now();
+        }
+        final age = (DateTime.now().difference(birthDate).inDays / 365).floor().toString();
+        final gender = patient.gender;
+
+        return {
+          'id': pid,
+          'name': patient.name,
+          'age': age,
+          'address': patient.address,
+          'gender': gender,
+          'birthDate': birthDate,
+          'category': patient.category,
+          'isSynced': patient.isSynced,
+
+          'avatarBg': gender == 'Laki-laki'
+              ? const Color(0x1BBA5855)
+              : AppColors.secondaryContainer,
+          'avatarColor': gender == 'Laki-laki'
+              ? AppColors.tertiary
+              : AppColors.primary,
+          'screenings': screeningMap[pid] ?? <DateTime>[],
+        };
+      }).toList();
+      _isLoading = false;
+    });
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
+
 
   // Check if a patient has been screened in the current month & year
   bool _isAlreadyScreenedThisMonth(List<DateTime> screenings) {
@@ -141,38 +163,58 @@ class _SkriningScreenState extends State<SkriningScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundAlt,
-      body: Column(
-        children: [
-          _buildHeader(),
-          Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.only(
-                left: 20.0,
-                right: 20.0,
-                top: 24.0,
-                bottom: 120.0, // Clear space for bottom bar
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildStatsOverview(),
-                  const SizedBox(height: 32.0),
-                  _buildSectionTitle(),
-                  const SizedBox(height: 16.0),
-                  _buildSearchAndFilter(),
-                  const SizedBox(height: 20.0),
-                  _buildPatientList(),
-                ],
+    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
+    return GestureDetector(
+      onTap: () {
+        _searchFocusNode.unfocus();
+        FocusManager.instance.primaryFocus?.unfocus();
+      },
+      behavior: HitTestBehavior.translucent,
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundAlt,
+        body: Column(
+          children: [
+            _buildHeader(),
+            const SyncStatusBanner(),
+            Expanded(
+              child: AppPullToRefresh(
+                onRefresh: () async {
+                  await SyncService.instance.syncAll();
+                  await _fetchPatients();
+                },
+                child: SingleChildScrollView(
+
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: ClampingScrollPhysics(),
+                  ),
+                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.only(
+                    left: 20.0,
+                    right: 20.0,
+                    top: 20.0,
+                    bottom: isKeyboardOpen ? 24.0 : 120.0, // Clear space for bottom bar when keyboard closed
+                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildStatsOverview(),
+                    const SizedBox(height: 22.0),
+                    _buildSectionHeader(),
+                    const SizedBox(height: 12.0),
+                    _buildSearchBar(),
+                    const SizedBox(height: 14.0),
+                    _buildPatientList(),
+                  ],
+                ),
               ),
             ),
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // Top header matching premium styling
   Widget _buildHeader() {
@@ -220,107 +262,232 @@ class _SkriningScreenState extends State<SkriningScreen> {
     );
   }
 
-  // Bento-style Stats Overview
+  // Bento-style Stats Overview with Interactive Toggle Filters (Option 1)
   Widget _buildStatsOverview() {
+    final isScreenedSelected = _selectedCategory == 'Sudah Skrining';
+    final isUnscreenedSelected = _selectedCategory == 'Belum Skrining';
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final cardWidth = (constraints.maxWidth - 16.0) / 2;
+        final cardWidth = (constraints.maxWidth - 14.0) / 2;
         return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            // Total Terpantau Card
-            Container(
-              width: cardWidth,
-              padding: const EdgeInsets.all(20.0),
-              decoration: BoxDecoration(
-                color: AppColors.primaryContainer,
-                borderRadius: BorderRadius.circular(24.0),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color.fromRGBO(0, 107, 71, 0.04),
-                    blurRadius: 24,
-                    offset: Offset(0, 4),
+            // 1. Warga Terpantau (Sudah Skrining) Card
+            _SpringButton(
+              onTap: () {
+                setState(() {
+                  if (isScreenedSelected) {
+                    _selectedCategory = 'Semua';
+                  } else {
+                    _selectedCategory = 'Sudah Skrining';
+                  }
+                });
+              },
+              child: Container(
+                width: cardWidth,
+                padding: const EdgeInsets.all(18.0),
+                decoration: BoxDecoration(
+                  color: isScreenedSelected
+                      ? AppColors.primary
+                      : AppColors.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(20.0),
+                  border: Border.all(
+                    color: isScreenedSelected
+                        ? AppColors.primary
+                        : AppColors.borderSubtle,
+                    width: isScreenedSelected ? 1.5 : 1.0,
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.assignment_rounded,
-                    color: Colors.white.withValues(alpha: 0.8),
-                    size: 24.0,
-                  ),
-                  const SizedBox(height: 12.0),
-                  Text(
-                    'Warga Terpantau',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withValues(alpha: 0.9),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: isScreenedSelected
+                                ? Colors.white.withValues(alpha: 0.2)
+                                : AppColors.secondaryContainer,
+                            borderRadius: BorderRadius.circular(10.0),
+                          ),
+                          child: Icon(
+                            Icons.check_circle_outline_rounded,
+                            color: isScreenedSelected ? Colors.white : AppColors.primary,
+                            size: 20.0,
+                          ),
+                        ),
+                        if (isScreenedSelected)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(6.0),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.check_rounded, size: 10, color: Colors.white),
+                                const SizedBox(width: 3),
+                                Text(
+                                  'Aktif',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 4.0),
-                  Text(
-                    '$_totalPatients',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1.0,
+                    const SizedBox(height: 14.0),
+                    Text(
+                      'Warga Terpantau',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: isScreenedSelected
+                            ? Colors.white.withValues(alpha: 0.9)
+                            : AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4.0),
+                    Text(
+                      '$_screenedCount',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: isScreenedSelected ? Colors.white : AppColors.textPrimary,
+                        height: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 4.0),
+                    Text(
+                      'Sudah skrining bulan ini',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w500,
+                        color: isScreenedSelected
+                            ? Colors.white.withValues(alpha: 0.8)
+                            : AppColors.primary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
+            const SizedBox(width: 14.0),
 
-            // Belum Skrining Card
-            Container(
-              width: cardWidth,
-              padding: const EdgeInsets.all(20.0),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(24.0),
-                border: Border.all(
-                  color: AppColors.borderSubtle.withValues(alpha: 0.5),
-                  width: 1.0,
+            // 2. Belum Skrining Card
+            _SpringButton(
+              onTap: () {
+                setState(() {
+                  if (isUnscreenedSelected) {
+                    _selectedCategory = 'Semua';
+                  } else {
+                    _selectedCategory = 'Belum Skrining';
+                  }
+                });
+              },
+              child: Container(
+                width: cardWidth,
+                padding: const EdgeInsets.all(18.0),
+                decoration: BoxDecoration(
+                  color: isUnscreenedSelected
+                      ? AppColors.statusWarning
+                      : AppColors.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(20.0),
+                  border: Border.all(
+                    color: isUnscreenedSelected
+                        ? AppColors.statusWarning
+                        : AppColors.borderSubtle,
+                    width: isUnscreenedSelected ? 1.5 : 1.0,
+                  ),
                 ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color.fromRGBO(0, 0, 0, 0.04),
-                    blurRadius: 24,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.pending_actions_rounded,
-                    color: _remainingCount > 0 ? AppColors.statusWarning : AppColors.primary,
-                    size: 24.0,
-                  ),
-                  const SizedBox(height: 12.0),
-                  Text(
-                    'Belum Skrining',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.onSurfaceVariant,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: isUnscreenedSelected
+                                ? Colors.white.withValues(alpha: 0.2)
+                                : AppColors.statusWarning.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10.0),
+                          ),
+                          child: Icon(
+                            Icons.pending_actions_rounded,
+                            color: isUnscreenedSelected ? Colors.white : AppColors.statusWarning,
+                            size: 20.0,
+                          ),
+                        ),
+                        if (isUnscreenedSelected)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(6.0),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.check_rounded, size: 10, color: Colors.white),
+                                const SizedBox(width: 3),
+                                Text(
+                                  'Aktif',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 4.0),
-                  Text(
-                    '$_remainingCount',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: _remainingCount > 0 ? AppColors.statusWarning : AppColors.primary,
-                      height: 1.0,
+                    const SizedBox(height: 14.0),
+                    Text(
+                      'Belum Skrining',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: isUnscreenedSelected
+                            ? Colors.white.withValues(alpha: 0.9)
+                            : AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4.0),
+                    Text(
+                      '$_remainingCount',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: isUnscreenedSelected ? Colors.white : AppColors.statusWarning,
+                        height: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 4.0),
+                    Text(
+                      'Perlu diperiksa',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w500,
+                        color: isUnscreenedSelected
+                            ? Colors.white.withValues(alpha: 0.8)
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -329,140 +496,139 @@ class _SkriningScreenState extends State<SkriningScreen> {
     );
   }
 
-  Widget _buildSectionTitle() {
-    return Text(
-      'Daftar Skrining Warga',
-      style: GoogleFonts.plusJakartaSans(
-        fontSize: 20,
-        fontWeight: FontWeight.w700,
-        color: AppColors.onSurface,
-        letterSpacing: -0.3,
+  // Full-width Search Bar
+  Widget _buildSearchBar() {
+    return Container(
+      height: 48.0,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(14.0),
+        border: Border.all(
+          color: AppColors.borderSubtle,
+          width: 1.0,
+        ),
+      ),
+      child: TextField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        onChanged: (value) {
+          setState(() {
+            _searchQuery = value;
+          });
+        },
+        decoration: InputDecoration(
+          hintText: 'Cari nama pasien...',
+          hintStyle: GoogleFonts.plusJakartaSans(
+            color: AppColors.outline,
+            fontSize: 13.0,
+          ),
+          prefixIcon: const Icon(
+            Icons.search_rounded,
+            color: AppColors.outline,
+            size: 20,
+          ),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.outline),
+                  onPressed: () {
+                    setState(() {
+                      _searchController.clear();
+                      _searchQuery = '';
+                    });
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
+        ),
+        style: GoogleFonts.plusJakartaSans(
+          color: AppColors.textPrimary,
+          fontSize: 13.0,
+        ),
       ),
     );
   }
 
-  // Search & Filter
-  Widget _buildSearchAndFilter() {
+  // Section Header with dynamic filter reset
+  Widget _buildSectionHeader() {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Expanded(
-          child: Container(
-            height: 52.0,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(16.0),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color.fromRGBO(0, 0, 0, 0.04),
-                  blurRadius: 24,
-                  offset: Offset(0, 4),
+          child: Text(
+            _selectedCategory == 'Semua'
+                ? 'Daftar Skrining Warga'
+                : 'Daftar • $_selectedCategory',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textPrimary,
+              letterSpacing: -0.2,
+            ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ),
+        const SizedBox(width: 8.0),
+        if (_selectedCategory != 'Semua')
+          _SpringButton(
+            onTap: () {
+              setState(() {
+                _selectedCategory = 'Semua';
+              });
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(8.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
                 ),
-              ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Tampilkan Semua',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 4.0),
+                  const Icon(
+                    Icons.close_rounded,
+                    size: 13,
+                    color: AppColors.primary,
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(8.0),
               border: Border.all(
-                color: AppColors.borderSubtle.withValues(alpha: 0.3),
+                color: AppColors.borderSubtle,
                 width: 1.0,
               ),
             ),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
-                });
-              },
-              decoration: InputDecoration(
-                hintText: 'Cari nama pasien...',
-                hintStyle: GoogleFonts.plusJakartaSans(
-                  color: AppColors.outline,
-                  fontSize: 14.0,
-                ),
-                prefixIcon: const Icon(
-                  Icons.search_rounded,
-                  color: AppColors.outline,
-                ),
-                suffixIcon: _searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear_rounded,
-                            color: AppColors.outline),
-                        onPressed: () {
-                          setState(() {
-                            _searchController.clear();
-                            _searchQuery = '';
-                          });
-                        },
-                      )
-                    : null,
-                border: InputBorder.none,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-              ),
+            child: Text(
+              '${_filteredPatients.length} Lansia',
               style: GoogleFonts.plusJakartaSans(
-                color: AppColors.onSurface,
-                fontSize: 14.0,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primary,
               ),
             ),
           ),
-        ),
-        const SizedBox(width: 12.0),
-        _buildDropdownFilter(),
       ],
-    );
-  }
-
-  Widget _buildDropdownFilter() {
-    return Container(
-      height: 52.0,
-      padding: const EdgeInsets.symmetric(horizontal: 12.0),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16.0),
-        border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.3),
-          width: 1.0,
-        ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _selectedCategory,
-          icon: const Icon(
-            Icons.filter_list_rounded,
-            color: AppColors.primary,
-            size: 20,
-          ),
-          style: GoogleFonts.plusJakartaSans(
-            color: AppColors.onSurface,
-            fontSize: 13.0,
-            fontWeight: FontWeight.bold,
-          ),
-          borderRadius: BorderRadius.circular(16.0),
-          dropdownColor: AppColors.surfaceContainerLowest,
-          onChanged: (String? newValue) {
-            if (newValue != null) {
-              setState(() {
-                _selectedCategory = newValue;
-              });
-            }
-          },
-          items: _categories.map<DropdownMenuItem<String>>((String value) {
-            return DropdownMenuItem<String>(
-              value: value,
-              child: Text(
-                value,
-                style: GoogleFonts.plusJakartaSans(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ),
     );
   }
 
@@ -526,6 +692,7 @@ class _SkriningScreenState extends State<SkriningScreen> {
     final avatarColor = patient['avatarColor'] as Color;
     final List<DateTime> screenings = patient['screenings'] as List<DateTime>;
     final isScreened = _isAlreadyScreenedThisMonth(screenings);
+    final isSynced = patient['isSynced'] as bool? ?? true;
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -576,18 +743,29 @@ class _SkriningScreenState extends State<SkriningScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Text(
-                            name,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  name,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.onSurface,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                              ),
+                              if (!isSynced) ...[
+                                const SizedBox(width: 6.0),
+                                const SyncStatusBadge(isSynced: false),
+                              ],
+                            ],
                           ),
                         ),
                         const SizedBox(width: 8.0),
+
                         // Age Pill
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -702,6 +880,10 @@ class _SkriningScreenState extends State<SkriningScreen> {
                 Expanded(
                   child: _SpringButton(
                     onTap: () async {
+                      // Dismiss focus before opening new screen
+                      _searchFocusNode.unfocus();
+                      FocusManager.instance.primaryFocus?.unfocus();
+
                       // Navigate to new screening
                       final result = await Navigator.push(
                         context,
@@ -715,6 +897,18 @@ class _SkriningScreenState extends State<SkriningScreen> {
                           ),
                         ),
                       );
+
+                      // Ensure search field is not focused upon returning
+                      if (mounted) {
+                        _searchFocusNode.unfocus();
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) {
+                            _searchFocusNode.unfocus();
+                            FocusManager.instance.primaryFocus?.unfocus();
+                          }
+                        });
+                      }
 
                       if (result == true && mounted) {
                         _fetchPatients();
@@ -789,6 +983,9 @@ class _SkriningScreenState extends State<SkriningScreen> {
             ? 'Diabetes Terkontrol'
             : 'Kesehatan Stabil';
 
+    _searchFocusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -807,6 +1004,14 @@ class _SkriningScreenState extends State<SkriningScreen> {
       ),
     );
     if (mounted) {
+      _searchFocusNode.unfocus();
+      FocusManager.instance.primaryFocus?.unfocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _searchFocusNode.unfocus();
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      });
       _fetchPatients();
     }
   }

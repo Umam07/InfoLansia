@@ -3,6 +3,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../theme.dart';
 import '../pasien/detail_pasien_screen.dart';
+import '../../widgets/app_pull_to_refresh.dart';
+import '../../widgets/medical_disclaimer_card.dart';
+import '../../constants/medical_guidelines.dart';
 
 class LayananGulaDarahScreen extends StatefulWidget {
   const LayananGulaDarahScreen({super.key});
@@ -58,15 +61,11 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
         final patientMap = item['patients'] as Map<String, dynamic>?;
         if (patientMap == null) continue;
 
-        final sugarVal = item['blood_sugar'] != null ? int.tryParse(item['blood_sugar'].toString()) : null;
+        final sugarVal = item['blood_sugar'] != null ? num.tryParse(item['blood_sugar'].toString())?.round() : null;
         if (sugarVal == null) continue;
 
-        String sugarStatus = 'Normal';
-        if (sugarVal >= 200) {
-          sugarStatus = 'Diabetes';
-        } else if (sugarVal >= 140) {
-          sugarStatus = 'Pre-Diabetes';
-        }
+        final eval = MedicalGuidelines.evaluateBloodSugar(sugarVal);
+        final sugarStatus = eval.shortLabel;
 
         final birthDateStr = patientMap['birth_date'] as String;
         final birthDate = DateTime.parse(birthDateStr);
@@ -85,17 +84,17 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
           'id': patientMap['id'],
           'name': patientMap['name'],
           'age': age,
-          'address': patientMap['address'],
+          'address': patientMap['address'] ?? '-',
           'gender': gender,
           'birthDate': birthDate,
           'glucose': sugarVal,
           'sugarStatus': sugarStatus,
           'checkDate': checkDateFormatted,
           'avatarBg': gender == 'Laki-laki' 
-              ? const Color(0x1BBA5855) 
+              ? const Color(0xFFE8EEF5) 
               : AppColors.secondaryContainer,
           'avatarColor': gender == 'Laki-laki' 
-              ? AppColors.tertiary 
+              ? const Color(0xFF2B5B84) 
               : AppColors.primary,
         });
       }
@@ -122,15 +121,6 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     }
   }
 
-  String _getCurrentMonthYear() {
-    final now = DateTime.now();
-    final months = [
-      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
-    ];
-    return '${months[now.month - 1]} ${now.year}';
-  }
-
   // Filter logic
   List<Map<String, dynamic>> get _filteredPatients {
     return _allPatients.where((p) {
@@ -154,10 +144,10 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
   double get _normalPct => _allPatients.isEmpty ? 0.70 : _normalCount / _totalGula;
   double get _prePct => _allPatients.isEmpty ? 0.20 : _preCount / _totalGula;
   double get _highPct => _allPatients.isEmpty ? 0.10 : _highCount / _totalGula;
-  int get _riskRate => _allPatients.isEmpty ? 15 : ((_highCount + _preCount) / _totalGula * 100).round();
-  int get _gulaRate => _totalPatientsCount > 0 ? (_totalGula / _totalPatientsCount * 100).round() : 0;
+  int get _riskRate => _allPatients.isEmpty ? 0 : ((_highCount + _preCount) / _totalGula * 100).round();
+  int get _gulaCoverageRate => _totalPatientsCount > 0 ? (_totalGula / _totalPatientsCount * 100).clamp(0, 100).round() : 0;
 
-  // Status color helper
+  // Status color helper (Strictly solid, clean)
   Color _getStatusColor(String status) {
     switch (status) {
       case 'Normal':
@@ -175,13 +165,13 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
   Color _getStatusLightBg(String status) {
     switch (status) {
       case 'Normal':
-        return AppColors.primary.withValues(alpha: 0.08);
+        return AppColors.primary.withValues(alpha: 0.1);
       case 'Pre-Diabetes':
-        return AppColors.statusWarning.withValues(alpha: 0.08);
+        return AppColors.statusWarning.withValues(alpha: 0.1);
       case 'Diabetes':
-        return AppColors.error.withValues(alpha: 0.08);
+        return AppColors.error.withValues(alpha: 0.1);
       default:
-        return AppColors.primary.withValues(alpha: 0.08);
+        return AppColors.primary.withValues(alpha: 0.1);
     }
   }
 
@@ -189,102 +179,113 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.backgroundAlt,
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(64.0),
-        child: _buildAppBar(context),
-      ),
-      body: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.only(
-          top: 20.0,
-          left: 20.0,
-          right: 20.0,
-          bottom: 24.0 + MediaQuery.of(context).padding.bottom,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Bento Stats Overview
-            _buildStatsOverview(),
-            const SizedBox(height: 24.0),
+      body: Column(
+        children: [
+          _buildAppBar(context),
+          Expanded(
+            child: AppPullToRefresh(
+              onRefresh: _fetchGulaRecords,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: ClampingScrollPhysics(),
+                ),
+                padding: EdgeInsets.only(
+                  top: 20.0,
+                  left: 20.0,
+                  right: 20.0,
+                  bottom: 32.0 + MediaQuery.of(context).padding.bottom,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Bento Stats Overview
+                    _buildStatsOverview(),
+                    const SizedBox(height: 20.0),
 
-            // Distribution Graphic Card
-            _buildDistributionCard(),
-            const SizedBox(height: 32.0),
+                    // Distribution Graphic Card
+                    _buildDistributionCard(),
+                    const SizedBox(height: 24.0),
 
-            // Section Header
-            _buildSectionHeader(),
-            const SizedBox(height: 16.0),
+                    // Patient List Section Header
+                    _buildSectionHeader(),
+                    const SizedBox(height: 14.0),
 
-            // Search Bar
-            _buildSearchBar(),
-            const SizedBox(height: 16.0),
+                    // Search Bar
+                    _buildSearchBar(),
+                    const SizedBox(height: 12.0),
 
-            // Filter Chips
-            _buildFilterChips(),
-            const SizedBox(height: 20.0),
+                    // Filter Chips
+                    _buildFilterChips(),
+                    const SizedBox(height: 18.0),
 
-            // Patient cards list
-            _buildPatientList(),
-          ],
-        ),
+                    // Patient Cards List
+                    _buildPatientList(),
+                    const SizedBox(height: 16.0),
+                    const MedicalDisclaimerCard(source: MedicalGuidelines.bloodSugarSource),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // App Bar
+  // 1. Top App Bar (Minimalist, Solid, Clean)
   Widget _buildAppBar(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        border: Border(
-          bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
-            width: 1.0,
-          ),
-        ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.02),
-            blurRadius: 16,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
+      color: AppColors.surfaceContainerLowest,
       child: SafeArea(
+        bottom: false,
         child: Container(
           height: 64.0,
-          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: AppColors.borderSubtle.withValues(alpha: 0.3),
+                width: 1.0,
+              ),
+            ),
+          ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _SpringButton(
                 onTap: () => Navigator.pop(context),
                 child: Container(
                   width: 40,
                   height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
+                  ),
                   alignment: Alignment.center,
                   child: const Icon(
-                    Icons.arrow_back_ios_rounded,
-                    color: AppColors.primary,
-                    size: 24.0,
+                    Icons.arrow_back_rounded,
+                    color: AppColors.textPrimary,
+                    size: 20.0,
                   ),
                 ),
               ),
+              const SizedBox(width: 14.0),
               Expanded(
                 child: Text(
                   'Cek Gula Darah',
-                  textAlign: TextAlign.center,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.3,
                   ),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
               ),
-              const SizedBox(width: 40.0), // Spacer to balance back button
             ],
           ),
         ),
@@ -292,146 +293,112 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     );
   }
 
-  // Bento Stats Grid
+  // 2. Bento Stats Overview (Strictly Zero Glow & Zero Gradient)
   Widget _buildStatsOverview() {
     return Column(
       children: [
-        // Main Bento Stats Card
+        // Main Bento Block: Total Pemeriksaan Gula Darah (Solid Clean Container)
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(20.0),
           decoration: BoxDecoration(
-            color: AppColors.primaryContainer,
-            borderRadius: BorderRadius.circular(28.0),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primaryContainer.withValues(alpha: 0.12),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
-              ),
-            ],
+            color: AppColors.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(20.0),
+            border: Border.all(
+              color: AppColors.borderSubtle,
+              width: 1.0,
+            ),
           ),
-          child: Stack(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Positioned(
-                right: -30,
-                bottom: -30,
-                width: 120,
-                height: 120,
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Icon(
-                        Icons.medical_information_rounded,
-                        color: Colors.white.withValues(alpha: 0.9),
-                        size: 28,
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        child: Text(
-                          _getCurrentMonthYear(),
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16.0),
-                  Text(
-                    'Total Cek Gula Darah',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white.withValues(alpha: 0.85),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.tertiaryFixed,
+                      borderRadius: BorderRadius.circular(12.0),
+                    ),
+                    child: const Icon(
+                      Icons.bloodtype_outlined,
+                      color: AppColors.tertiary,
+                      size: 22,
                     ),
                   ),
-                  const SizedBox(height: 4.0),
-                  Text(
-                    '$_totalGula',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 32,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1.0,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(6.0),
                     ),
-                  ),
-                  const SizedBox(height: 12.0),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.trending_up_rounded,
-                        color: AppColors.primaryFixed,
-                        size: 16,
+                    child: Text(
+                      '$_gulaCoverageRate% Cakupan Warga',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
                       ),
-                      const SizedBox(width: 4.0),
-                      Text(
-                        '$_gulaRate% dari seluruh lansia terdaftar',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primaryFixed,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 16.0),
+              Text(
+                '$_totalGula',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(height: 6.0),
+              Text(
+                _totalPatientsCount > 0
+                    ? 'Total skrining glukosa tercatat dari $_totalPatientsCount lansia'
+                    : 'Total skrining glukosa darah tercatat',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textSecondary,
+                ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 14.0),
+        const SizedBox(height: 12.0),
 
         // Row containing two smaller bento blocks
         Row(
           children: [
-            // Rata-rata Glukosa
+            // Rata-rata Glukosa Darah
             Expanded(
               child: Container(
-                padding: const EdgeInsets.all(20.0),
+                padding: const EdgeInsets.all(16.0),
                 decoration: BoxDecoration(
                   color: AppColors.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(24.0),
+                  borderRadius: BorderRadius.circular(18.0),
                   border: Border.all(
-                    color: AppColors.borderSubtle.withValues(alpha: 0.5),
+                    color: AppColors.borderSubtle,
                     width: 1.0,
                   ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color.fromRGBO(0, 0, 0, 0.03),
-                      blurRadius: 16,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      width: 34,
+                      height: 34,
                       decoration: BoxDecoration(
-                        color: AppColors.secondaryContainer,
-                        borderRadius: BorderRadius.circular(10),
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(10.0),
                       ),
                       child: const Icon(
-                        Icons.biotech_rounded,
-                        color: AppColors.primary,
+                        Icons.analytics_rounded,
+                        color: AppColors.textPrimary,
                         size: 18,
                       ),
                     ),
@@ -445,70 +412,67 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                       ),
                     ),
                     const SizedBox(height: 4.0),
-                    Text(
-                      '$_avgSugar',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.onSurface,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    Text(
-                      'mg/dL (${_avgSugar >= 200 ? 'Diabetes' : _avgSugar >= 140 ? 'Pre-Diabetes' : 'Normal'})',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: _avgSugar >= 200 
-                            ? AppColors.error 
-                            : _avgSugar >= 140 
-                                ? AppColors.statusWarning 
-                                : AppColors.primary,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          '$_avgSugar',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(width: 4.0),
+                        Text(
+                          'mg/dL',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(width: 14.0),
+            const SizedBox(width: 12.0),
 
-            // Pre-Diabetes + Diabetes rate
+            // Laju Risiko Diabetes (Warning indicator)
             Expanded(
               child: Container(
-                padding: const EdgeInsets.all(20.0),
+                padding: const EdgeInsets.all(16.0),
                 decoration: BoxDecoration(
                   color: AppColors.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(24.0),
+                  borderRadius: BorderRadius.circular(18.0),
                   border: Border.all(
-                    color: AppColors.borderSubtle.withValues(alpha: 0.5),
+                    color: AppColors.borderSubtle,
                     width: 1.0,
                   ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color.fromRGBO(0, 0, 0, 0.03),
-                      blurRadius: 16,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      width: 34,
+                      height: 34,
                       decoration: BoxDecoration(
-                        color: AppColors.tertiaryContainer.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
+                        color: AppColors.error.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10.0),
                       ),
                       child: const Icon(
-                        Icons.bubble_chart_rounded,
-                        color: AppColors.tertiary,
+                        Icons.warning_amber_rounded,
+                        color: AppColors.error,
                         size: 18,
                       ),
                     ),
                     const SizedBox(height: 12.0),
                     Text(
-                      'Butuh Perhatian',
+                      'Laju Risiko Gula',
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
@@ -516,22 +480,29 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                       ),
                     ),
                     const SizedBox(height: 4.0),
-                    Text(
-                      '$_riskRate%',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.onSurface,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    Text(
-                      'Laju Risiko Tinggi',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: _riskRate > 0 ? AppColors.statusWarning : AppColors.primary,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          '$_riskRate%',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: _riskRate > 20 ? AppColors.error : AppColors.statusWarning,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(width: 4.0),
+                        Text(
+                          'Pantauan',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -543,24 +514,17 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     );
   }
 
-  // Distribution Card
+  // 3. Distribution Graphic Card (Solid Modern Bars, Zero Glow)
   Widget _buildDistributionCard() {
     return Container(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(20.0),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(28.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.03),
-            blurRadius: 24,
-            offset: Offset(0, 6),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -572,62 +536,64 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Status Gula Darah',
+                    'Distribusi Status Glukosa Darah',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.onSurface,
-                      letterSpacing: -0.2,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2.0),
                   Text(
-                    'Distribusi glukosa lansia di komunitas',
+                    'Perbandingan proporsi kadar gula darah lansia',
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
+                      fontSize: 11,
                       color: AppColors.textSecondary,
                     ),
                   ),
                 ],
               ),
               const Icon(
-                Icons.analytics_rounded,
+                Icons.bar_chart_rounded,
                 color: AppColors.primary,
-                size: 24,
+                size: 22,
               ),
             ],
           ),
-          const SizedBox(height: 28.0),
+          const SizedBox(height: 24.0),
 
-          // Bar distribution CustomPainter
+          // Custom solid bar distribution painter with smooth animation
           SizedBox(
-            height: 180,
+            height: 150,
             child: TweenAnimationBuilder<double>(
               tween: Tween<double>(begin: 0.0, end: 1.0),
-              duration: const Duration(milliseconds: 1000),
-              curve: Curves.easeOutBack,
+              duration: const Duration(milliseconds: 900),
+              curve: Curves.easeOutCubic,
               builder: (context, value, child) {
                 return CustomPaint(
-                  painter: _GlucoseDistributionPainter(
+                  painter: _GlucoseDistributionSolidPainter(
                     normalPct: _normalPct,
                     preDiabetesPct: _prePct,
                     diabetesPct: _highPct,
+                    normalCount: _normalCount,
+                    preCount: _preCount,
+                    highCount: _highCount,
                     animVal: value,
                   ),
                 );
               },
             ),
           ),
-          const SizedBox(height: 16.0),
+          const SizedBox(height: 18.0),
 
-          // Legend
+          // Legend details with solid indicators
           Wrap(
             alignment: WrapAlignment.center,
             crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 16.0,
             runSpacing: 8.0,
             children: [
-              _buildLegendItem('Normal (<140)', AppColors.primary),
+              _buildLegendItem('Normal (<140 mg/dL)', AppColors.primary),
               _buildLegendItem('Pre-Diabetes (140-199)', AppColors.statusWarning),
               _buildLegendItem('Diabetes (>=200)', AppColors.error),
             ],
@@ -639,10 +605,11 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
 
   Widget _buildLegendItem(String label, Color color) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 10,
-          height: 10,
+          width: 8,
+          height: 8,
           decoration: BoxDecoration(
             color: color,
             shape: BoxShape.circle,
@@ -661,28 +628,32 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     );
   }
 
-  // List section header
+  // 4. Patient List Section Header
   Widget _buildSectionHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
-          'Daftar Hasil Lansia',
+          'Daftar Hasil Pemeriksaan',
           style: GoogleFonts.plusJakartaSans(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.onSurface,
-            letterSpacing: -0.3,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+            letterSpacing: -0.2,
           ),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
           decoration: BoxDecoration(
             color: AppColors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(10.0),
+            borderRadius: BorderRadius.circular(8.0),
+            border: Border.all(
+              color: AppColors.borderSubtle,
+              width: 1.0,
+            ),
           ),
           child: Text(
-            '${_filteredPatients.length} Orang',
+            '${_filteredPatients.length} Lansia',
             style: GoogleFonts.plusJakartaSans(
               fontSize: 12,
               fontWeight: FontWeight.w700,
@@ -694,26 +665,20 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     );
   }
 
-  // Search input
+  // 5. Search Bar (Clean Solid Input with Clear Button)
   Widget _buildSearchBar() {
     return Container(
-      height: 52.0,
+      height: 48.0,
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16.0),
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.03),
-            blurRadius: 16,
-            offset: Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(14.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle,
           width: 1.0,
         ),
       ),
       child: TextField(
+        controller: _searchController,
         onChanged: (val) {
           setState(() {
             _searchQuery = val;
@@ -723,24 +688,36 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
           hintText: 'Cari nama lansia...',
           hintStyle: GoogleFonts.plusJakartaSans(
             color: AppColors.outline,
-            fontSize: 14.0,
+            fontSize: 13.0,
           ),
           prefixIcon: const Icon(
             Icons.search_rounded,
             color: AppColors.outline,
+            size: 20,
           ),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.outline),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {
+                      _searchQuery = '';
+                    });
+                  },
+                )
+              : null,
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
         ),
         style: GoogleFonts.plusJakartaSans(
-          color: AppColors.onSurface,
-          fontSize: 14.0,
+          color: AppColors.textPrimary,
+          fontSize: 13.0,
         ),
       ),
     );
   }
 
-  // Filter Chips
+  // 6. Filter Chips (Solid Pills, Zero Glow)
   Widget _buildFilterChips() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -757,30 +734,21 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                 });
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 7.0),
                 decoration: BoxDecoration(
                   color: isSelected ? AppColors.primary : AppColors.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(12.0),
+                  borderRadius: BorderRadius.circular(10.0),
                   border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.borderSubtle.withValues(alpha: 0.5),
+                    color: isSelected ? AppColors.primary : AppColors.borderSubtle,
                     width: 1.0,
                   ),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.15),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : null,
                 ),
                 child: Text(
                   filter,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13.0,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    color: isSelected ? Colors.white : AppColors.onSurfaceVariant,
+                    fontSize: 12.0,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                    color: isSelected ? Colors.white : AppColors.textSecondary,
                   ),
                 ),
               ),
@@ -791,38 +759,57 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
     );
   }
 
-  // Patient Card Lists
+  // 7. Patient Cards List
   Widget _buildPatientList() {
     if (_isLoading) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.symmetric(vertical: 40.0),
           child: CircularProgressIndicator(
-            color: AppColors.primary,
+            strokeWidth: 2.5,
+            valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
           ),
         ),
       );
     }
+
     final list = _filteredPatients;
 
     if (list.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 40.0),
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 36.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(18.0),
+          border: Border.all(
+            color: AppColors.borderSubtle,
+            width: 1.0,
+          ),
+        ),
+        child: Center(
           child: Column(
             children: [
               const Icon(
                 Icons.person_search_rounded,
-                size: 48,
+                size: 40,
                 color: AppColors.outlineVariant,
               ),
-              const SizedBox(height: 12.0),
+              const SizedBox(height: 10.0),
               Text(
                 'Lansia tidak ditemukan',
                 style: GoogleFonts.plusJakartaSans(
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
                   fontSize: 14.0,
+                ),
+              ),
+              const SizedBox(height: 4.0),
+              Text(
+                'Coba sesuaikan kata kunci pencarian atau filter status.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  color: AppColors.textSecondary,
+                  fontSize: 12.0,
                 ),
               ),
             ],
@@ -835,7 +822,7 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: list.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 14.0),
+      separatorBuilder: (context, index) => const SizedBox(height: 12.0),
       itemBuilder: (context, index) {
         final p = list[index];
         final String name = p['name'];
@@ -848,18 +835,11 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
           padding: const EdgeInsets.all(16.0),
           decoration: BoxDecoration(
             color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(24.0),
+            borderRadius: BorderRadius.circular(18.0),
             border: Border.all(
-              color: AppColors.borderSubtle.withValues(alpha: 0.5),
+              color: AppColors.borderSubtle,
               width: 1.0,
             ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color.fromRGBO(0, 0, 0, 0.02),
-                blurRadius: 16,
-                offset: Offset(0, 4),
-              ),
-            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -867,25 +847,25 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Beautiful Initials Avatar
+                  // Initials Avatar
                   Container(
-                    width: 46,
-                    height: 46,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: p['avatarBg'] as Color? ?? AppColors.secondaryContainer,
-                      borderRadius: BorderRadius.circular(14.0),
+                      borderRadius: BorderRadius.circular(12.0),
                     ),
                     alignment: Alignment.center,
                     child: Text(
-                      name.split(' ').map((e) => e[0]).take(2).join('').toUpperCase(),
+                      name.split(' ').map((e) => e.isNotEmpty ? e[0] : '').take(2).join('').toUpperCase(),
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
                         color: p['avatarColor'] as Color? ?? AppColors.primary,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 14.0),
+                  const SizedBox(width: 12.0),
 
                   // Name & Details
                   Expanded(
@@ -895,21 +875,21 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                         Text(
                           name,
                           style: GoogleFonts.plusJakartaSans(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.onSurface,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4.0),
+                        const SizedBox(height: 3.0),
                         Row(
                           children: [
                             Text(
-                              '$age Thn',
+                              '$age Tahun',
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w600,
                                 color: AppColors.textSecondary,
                               ),
                             ),
@@ -936,7 +916,7 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                     ),
                   ),
 
-                  // Glucose large text
+                  // Blood Sugar large text
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
@@ -949,6 +929,7 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                           height: 1.0,
                         ),
                       ),
+                      const SizedBox(height: 2.0),
                       Text(
                         'mg/dL',
                         style: GoogleFonts.plusJakartaSans(
@@ -961,21 +942,21 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14.0),
-              Divider(
-                height: 1.0,
-                thickness: 0.5,
-                color: AppColors.borderSubtle.withValues(alpha: 0.5),
-              ),
               const SizedBox(height: 12.0),
+              const Divider(
+                height: 1.0,
+                thickness: 1.0,
+                color: AppColors.borderSubtle,
+              ),
+              const SizedBox(height: 10.0),
 
-              // Action row
+              // Action buttons row
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Status Tag Pill
+                  // Status Tag Pill (Solid, Clean)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
+                    padding: const EdgeInsets.symmetric(horizontal: 9.0, vertical: 4.0),
                     decoration: BoxDecoration(
                       color: _getStatusLightBg(status),
                       borderRadius: BorderRadius.circular(6.0),
@@ -983,10 +964,10 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                     child: Text(
                       status.toUpperCase(),
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 9.5,
+                        fontSize: 10,
                         fontWeight: FontWeight.w800,
                         color: _getStatusColor(status),
-                        letterSpacing: 0.5,
+                        letterSpacing: 0.3,
                       ),
                     ),
                   ),
@@ -999,7 +980,6 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                       final bDate = p['birthDate'] as DateTime;
                       final ageStr = p['age'] as String;
 
-                      // Format birthdate
                       final months = [
                         'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
                         'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
@@ -1018,10 +998,10 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                             birthDate: birthDateStr,
                             birthDateTime: bDate,
                             healthStatus: status == 'Normal'
-                                ? 'Diabetes Terkontrol'
+                                ? 'Glukosa Darah Normal'
                                 : status == 'Pre-Diabetes'
-                                    ? 'Pre-Diabetes Dipantau'
-                                    : 'Diabetes Perlu Perhatian',
+                                    ? 'Pre-Diabetes Perlu Dipantau'
+                                    : 'Diabetes Perlu Tindakan Medis',
                             avatarBg: p['avatarBg'] as Color?,
                             avatarColor: p['avatarColor'] as Color?,
                           ),
@@ -1029,25 +1009,30 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
                       );
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 5.0),
                       decoration: BoxDecoration(
                         color: AppColors.surfaceContainerLow,
                         borderRadius: BorderRadius.circular(8.0),
+                        border: Border.all(
+                          color: AppColors.borderSubtle,
+                          width: 1.0,
+                        ),
                       ),
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
                             'Lihat Detail',
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 11,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
                               color: AppColors.primary,
                             ),
                           ),
                           const SizedBox(width: 4.0),
                           const Icon(
                             Icons.arrow_forward_ios_rounded,
-                            size: 10,
+                            size: 9,
                             color: AppColors.primary,
                           ),
                         ],
@@ -1064,17 +1049,23 @@ class _LayananGulaDarahScreenState extends State<LayananGulaDarahScreen> {
   }
 }
 
-// GlucoseDistributionPainter draws a premium vertical bar chart indicating blood sugar levels
-class _GlucoseDistributionPainter extends CustomPainter {
+// GlucoseDistributionSolidPainter draws a clean, solid, modern bar chart indicating glucose levels
+class _GlucoseDistributionSolidPainter extends CustomPainter {
   final double normalPct;
   final double preDiabetesPct;
   final double diabetesPct;
+  final int normalCount;
+  final int preCount;
+  final int highCount;
   final double animVal;
 
-  _GlucoseDistributionPainter({
+  _GlucoseDistributionSolidPainter({
     required this.normalPct,
     required this.preDiabetesPct,
     required this.diabetesPct,
+    required this.normalCount,
+    required this.preCount,
+    required this.highCount,
     required this.animVal,
   });
 
@@ -1082,80 +1073,83 @@ class _GlucoseDistributionPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final double width = size.width;
     final double height = size.height;
-    const double padding = 16.0;
+    const double bottomPadding = 24.0;
+    const double topPadding = 24.0;
+    final double chartHeight = height - topPadding - bottomPadding;
 
-    // Draw background grid lines
+    // Draw background subtle grid lines
     final gridPaint = Paint()
-      ..color = AppColors.onSurface.withValues(alpha: 0.04)
+      ..color = AppColors.borderSubtle
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    for (int i = 0; i <= 3; i++) {
-      final double y = padding + i * (height - 2 * padding) / 3;
+    for (int i = 0; i <= 2; i++) {
+      final double y = topPadding + i * (chartHeight / 2);
       canvas.drawLine(Offset(0, y), Offset(width, y), gridPaint);
     }
 
-    // Bar variables
+    // Bar layout metrics
     final double barSpacing = width * 0.12;
     final double barWidth = (width - (4 * barSpacing)) / 3;
 
     final categories = [
-      {'label': '${(normalPct * 100).round()}%', 'value': normalPct, 'color1': const Color(0xFF00875A), 'color2': AppColors.primary},
-      {'label': '${(preDiabetesPct * 100).round()}%', 'value': preDiabetesPct, 'color1': const Color(0xFFF59E0B), 'color2': AppColors.statusWarning},
-      {'label': '${(diabetesPct * 100).round()}%', 'value': diabetesPct, 'color1': const Color(0xFFEF4444), 'color2': AppColors.error},
+      {
+        'label': '${(normalPct * 100).round()}%',
+        'sublabel': '$normalCount lansia',
+        'value': normalPct,
+        'color': AppColors.primary,
+      },
+      {
+        'label': '${(preDiabetesPct * 100).round()}%',
+        'sublabel': '$preCount lansia',
+        'value': preDiabetesPct,
+        'color': AppColors.statusWarning,
+      },
+      {
+        'label': '${(diabetesPct * 100).round()}%',
+        'sublabel': '$highCount lansia',
+        'value': diabetesPct,
+        'color': AppColors.error,
+      },
     ];
 
     for (int i = 0; i < 3; i++) {
       final cat = categories[i];
-      final double pct = cat['value'] as double;
-      final Color color1 = cat['color1'] as Color;
-      final Color color2 = cat['color2'] as Color;
+      final double pct = (cat['value'] as double).clamp(0.05, 1.0);
+      final Color color = cat['color'] as Color;
       final String label = cat['label'] as String;
+      final String sublabel = cat['sublabel'] as String;
 
-      // Position calculations
       final double x = barSpacing + i * (barWidth + barSpacing);
-      final double targetBarHeight = (height - 2 * padding) * pct;
+      final double targetBarHeight = chartHeight * pct;
       final double animatedBarHeight = targetBarHeight * animVal;
-      final double y = height - padding - animatedBarHeight;
+      final double y = height - bottomPadding - animatedBarHeight;
 
       if (animatedBarHeight > 0) {
-        // Draw elegant rounded bar
+        // Rounded Solid Bar (Strictly Zero Gradient & Zero Glow)
         final RRect rrect = RRect.fromRectAndCorners(
           Rect.fromLTWH(x, y, barWidth, animatedBarHeight),
-          topLeft: const Radius.circular(12),
-          topRight: const Radius.circular(12),
-          bottomLeft: const Radius.circular(4),
-          bottomRight: const Radius.circular(4),
+          topLeft: const Radius.circular(8),
+          topRight: const Radius.circular(8),
+          bottomLeft: const Radius.circular(3),
+          bottomRight: const Radius.circular(3),
         );
 
         final Paint barPaint = Paint()
-          ..shader = LinearGradient(
-            colors: [color1, color2],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ).createShader(Rect.fromLTWH(x, y, barWidth, animatedBarHeight))
+          ..color = color
           ..style = PaintingStyle.fill;
-
-        // Draw shadow glow behind the bar
-        canvas.drawRRect(
-          rrect.shift(const Offset(0, 3)),
-          Paint()
-            ..color = color2.withValues(alpha: 0.12)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
-            ..style = PaintingStyle.fill,
-        );
 
         canvas.drawRRect(rrect, barPaint);
 
-        // Draw percentage text on top of the bar
-        if (animVal >= 0.7) {
+        // Percentage text on top of the bar
+        if (animVal >= 0.6) {
           final textPainter = TextPainter(
             text: TextSpan(
               text: label,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 12.0,
                 fontWeight: FontWeight.w800,
-                color: color2,
+                color: color,
               ),
             ),
             textDirection: TextDirection.ltr,
@@ -1163,7 +1157,25 @@ class _GlucoseDistributionPainter extends CustomPainter {
           textPainter.layout();
           textPainter.paint(
             canvas,
-            Offset(x + (barWidth - textPainter.width) / 2, y - textPainter.height - 6.0),
+            Offset(x + (barWidth - textPainter.width) / 2, y - textPainter.height - 4.0),
+          );
+
+          // Sublabel count below the bar
+          final subTextPainter = TextPainter(
+            text: TextSpan(
+              text: sublabel,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 10.0,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          );
+          subTextPainter.layout();
+          subTextPainter.paint(
+            canvas,
+            Offset(x + (barWidth - subTextPainter.width) / 2, height - bottomPadding + 6.0),
           );
         }
       }
@@ -1171,15 +1183,16 @@ class _GlucoseDistributionPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _GlucoseDistributionPainter oldDelegate) {
+  bool shouldRepaint(covariant _GlucoseDistributionSolidPainter oldDelegate) {
     return oldDelegate.animVal != animVal ||
         oldDelegate.normalPct != normalPct ||
         oldDelegate.preDiabetesPct != preDiabetesPct ||
-        oldDelegate.diabetesPct != diabetesPct;
+        oldDelegate.diabetesPct != diabetesPct ||
+        oldDelegate.normalCount != normalCount;
   }
 }
 
-// private spring button to give nice tactile clicks
+// Private tactile spring button
 class _SpringButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
@@ -1202,8 +1215,8 @@ class _SpringButtonState extends State<_SpringButton> with SingleTickerProviderS
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 80),
-      lowerBound: 0.95,
+      duration: const Duration(milliseconds: 90),
+      lowerBound: 0.96,
       upperBound: 1.0,
       value: 1.0,
     );

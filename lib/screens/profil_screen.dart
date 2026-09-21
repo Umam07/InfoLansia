@@ -1,15 +1,21 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import '../theme.dart';
 import '../widgets/app_toast.dart';
-import 'login_screen.dart';
+import '../widgets/app_pull_to_refresh.dart';
+import '../widgets/medical_disclaimer_card.dart';
+import '../services/kader_auth_service.dart';
+import '../database/app_database.dart';
+import '../services/sync_service.dart';
+import 'welcome_screen.dart';
+
 
 class ProfilScreen extends StatefulWidget {
-  const ProfilScreen({
-    super.key,
-  });
+  const ProfilScreen({super.key});
 
   @override
   State<ProfilScreen> createState() => _ProfilScreenState();
@@ -78,40 +84,46 @@ class _ProfilScreenState extends State<ProfilScreen> {
     return '$day/$month/${date.year}';
   }
 
-  InputDecoration _buildInputDecoration({required String hint}) {
+  InputDecoration _buildInputDecoration({
+    required String hint,
+    Widget? prefixIcon,
+    Widget? suffixIcon,
+  }) {
     return InputDecoration(
       hintText: hint,
+      prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
       hintStyle: GoogleFonts.plusJakartaSans(
         color: AppColors.outline.withValues(alpha: 0.6),
-        fontSize: 14.0,
+        fontSize: 13.5,
       ),
       filled: true,
-      fillColor: AppColors.surface,
+      fillColor: AppColors.surfaceContainerLow,
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
-        borderSide: const BorderSide(
-          color: AppColors.borderSubtle,
+        borderRadius: BorderRadius.circular(14.0),
+        borderSide: BorderSide(
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
           width: 1.0,
         ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.primary,
           width: 1.5,
         ),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.error,
           width: 1.0,
         ),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(14.0),
         borderSide: const BorderSide(
           color: AppColors.error,
           width: 1.5,
@@ -128,31 +140,40 @@ class _ProfilScreenState extends State<ProfilScreen> {
         children: [
           _buildHeader(context),
           Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.only(
-                left: 20.0,
-                right: 20.0,
-                top: 16.0,
-                bottom: 120.0, // Large space for BottomNavBar
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildProfileHeader(context),
-                  const SizedBox(height: 24.0),
-                  _buildGroupTitle('Menu Akun'),
-                  const SizedBox(height: 8.0),
-                  _buildMenuAkun(context),
-                  const SizedBox(height: 24.0),
-                  _buildGroupTitle('Menu Aplikasi'),
-                  const SizedBox(height: 8.0),
-                  _buildMenuAplikasi(context),
-                  const SizedBox(height: 32.0),
-                  _buildLogoutButton(context),
-                  const SizedBox(height: 24.0),
-                  _buildVersionText(),
-                ],
+            child: AppPullToRefresh(
+              onRefresh: () async {
+                setState(() {
+                  _loadUserData();
+                });
+              },
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: ClampingScrollPhysics(),
+                ),
+                padding: const EdgeInsets.only(
+                  left: 20.0,
+                  right: 20.0,
+                  top: 16.0,
+                  bottom: 120.0, // Space for shared floating bottom nav
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildProfileHeader(context),
+                    const SizedBox(height: 24.0),
+                    _buildGroupTitle('Menu Akun'),
+                    const SizedBox(height: 8.0),
+                    _buildMenuAkun(context),
+                    const SizedBox(height: 24.0),
+                    _buildGroupTitle('Menu Aplikasi'),
+                    const SizedBox(height: 8.0),
+                    _buildMenuAplikasi(context),
+                    const SizedBox(height: 32.0),
+                    _buildLogoutButton(context),
+                    const SizedBox(height: 24.0),
+                    _buildVersionText(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -166,16 +187,9 @@ class _ProfilScreenState extends State<ProfilScreen> {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        boxShadow: const [
-          BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
-          ),
-        ],
         border: Border(
           bottom: BorderSide(
-            color: AppColors.borderSubtle.withValues(alpha: 0.3),
+            color: AppColors.borderSubtle.withValues(alpha: 0.6),
             width: 1.0,
           ),
         ),
@@ -185,18 +199,15 @@ class _ProfilScreenState extends State<ProfilScreen> {
         child: Container(
           height: 64.0,
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            children: [
-              Text(
-                'Profil',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.primary,
-                  letterSpacing: -0.5,
-                ),
-              ),
-            ],
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Profil',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              color: AppColors.primary,
+              letterSpacing: -0.5,
+            ),
           ),
         ),
       ),
@@ -227,108 +238,110 @@ class _ProfilScreenState extends State<ProfilScreen> {
           .toUpperCase();
       if (initials.isNotEmpty) {
         return Container(
-          color: AppColors.secondaryContainer,
+          color: AppColors.primary.withValues(alpha: 0.12),
           alignment: Alignment.center,
           child: Text(
             initials,
             style: GoogleFonts.plusJakartaSans(
               fontSize: 32,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w800,
               color: AppColors.primary,
             ),
           ),
         );
       }
     }
-    return const Icon(
-      Icons.person_rounded,
-      color: AppColors.primary,
-      size: 48.0,
+    return Container(
+      color: AppColors.primary.withValues(alpha: 0.12),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.person_rounded,
+        color: AppColors.primary,
+        size: 48.0,
+      ),
     );
   }
 
-  // Profile Header (Avatar, Name, Age)
+  // Profile Header (Avatar, Name, Role Badge, Email)
   Widget _buildProfileHeader(BuildContext context) {
-    final email = _user?.email ?? 'petugas@posyandusakura.id';
+    final email = _user?.email ?? 'kader@posyandusakura.id';
+
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24.0),
+        padding: const EdgeInsets.only(top: 18.0, bottom: 20.0),
         child: Column(
           children: [
-            // Profile image with edit badge overlay
-            Stack(
-              children: [
-                Container(
-                  width: 112.0,
-                  height: 112.0,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: AppColors.surfaceContainer,
-                    border: Border.all(
-                      color: Colors.white,
-                      width: 4.0,
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color.fromRGBO(0, 0, 0, 0.06),
-                        blurRadius: 24,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(999.0),
-                    child: _buildAvatarWidget(),
-                  ),
+            // Profile image with clean minimal border, strictly zero blur glow
+            Container(
+              width: 88.0,
+              height: 88.0,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.surfaceContainerLowest,
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 2.0,
                 ),
-                // Edit badge
-                Positioned(
-                  bottom: 0.0,
-                  right: 0.0,
-                  child: _SpringButton(
-                    onTap: () {
-                      _showToast(context, 'Ubah Foto Profil');
-                    },
-                    child: Container(
-                      width: 32.0,
-                      height: 32.0,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryContainer,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.white,
-                          width: 2.0,
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.edit_rounded,
-                        color: Colors.white,
-                        size: 16.0,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(44.0),
+                child: _buildAvatarWidget(),
+              ),
             ),
-            const SizedBox(height: 16.0),
+            const SizedBox(height: 14.0),
+
             // User Name
             Text(
-              _name.isNotEmpty ? _name : 'Nama Pengguna',
+              _name.isNotEmpty ? _name : 'Kader Posyandu',
               style: GoogleFonts.plusJakartaSans(
-                fontSize: 20.0,
-                fontWeight: FontWeight.w600,
-                color: AppColors.onSurface,
+                fontSize: 19.0,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
                 letterSpacing: -0.3,
               ),
             ),
-            const SizedBox(height: 4.0),
+            const SizedBox(height: 6.0),
+
+            // Role Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8.0),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  width: 1.0,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.verified_user_outlined,
+                    size: 13.0,
+                    color: AppColors.primary,
+                  ),
+                  const SizedBox(width: 5.0),
+                  Text(
+                    'Kader Posyandu Sakura RW 06',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6.0),
+
             // User Email
             Text(
               email,
               style: GoogleFonts.plusJakartaSans(
-                fontSize: 14.0,
+                fontSize: 13.0,
                 color: AppColors.textSecondary,
-                fontWeight: FontWeight.normal,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
@@ -340,12 +353,12 @@ class _ProfilScreenState extends State<ProfilScreen> {
   // Section Group Title
   Widget _buildGroupTitle(String title) {
     return Padding(
-      padding: const EdgeInsets.only(left: 8.0),
+      padding: const EdgeInsets.only(left: 4.0),
       child: Text(
         title.toUpperCase(),
         style: GoogleFonts.plusJakartaSans(
-          fontSize: 12.0,
-          fontWeight: FontWeight.w500,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
           color: AppColors.textSecondary,
           letterSpacing: 0.8,
         ),
@@ -353,21 +366,21 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Account Menu Box (Grouped)
+  // Account Menu Box (Grouped Bento)
   Widget _buildMenuAkun(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
           width: 1.0,
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -375,9 +388,9 @@ class _ProfilScreenState extends State<ProfilScreen> {
         children: [
           _buildRowItem(
             context: context,
-            icon: Icons.person_rounded,
-            iconColor: AppColors.primaryContainer,
-            iconBgColor: AppColors.secondaryContainer,
+            icon: Icons.person_outline_rounded,
+            iconColor: AppColors.primary,
+            iconBgColor: AppColors.primary.withValues(alpha: 0.1),
             title: 'Informasi Pribadi',
             onTap: () {
               _showInformasiPribadi(context);
@@ -388,21 +401,21 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // App Menu Box (Grouped)
+  // App Menu Box (Grouped Bento)
   Widget _buildMenuAplikasi(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16.0),
+        borderRadius: BorderRadius.circular(20.0),
         border: Border.all(
-          color: AppColors.borderSubtle.withValues(alpha: 0.5),
+          color: AppColors.borderSubtle.withValues(alpha: 0.8),
           width: 1.0,
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color.fromRGBO(0, 0, 0, 0.04),
-            blurRadius: 24,
-            offset: Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -411,8 +424,8 @@ class _ProfilScreenState extends State<ProfilScreen> {
           _buildRowItem(
             context: context,
             icon: Icons.help_outline_rounded,
-            iconColor: AppColors.onSurfaceVariant,
-            iconBgColor: AppColors.surfaceContainer,
+            iconColor: AppColors.primary,
+            iconBgColor: AppColors.surfaceContainerLow,
             title: 'Pusat Bantuan',
             onTap: () {
               _showPusatBantuan(context);
@@ -422,8 +435,8 @@ class _ProfilScreenState extends State<ProfilScreen> {
           _buildRowItem(
             context: context,
             icon: Icons.info_outline_rounded,
-            iconColor: AppColors.onSurfaceVariant,
-            iconBgColor: AppColors.surfaceContainer,
+            iconColor: AppColors.primary,
+            iconBgColor: AppColors.surfaceContainerLow,
             title: 'Tentang Aplikasi',
             onTap: () {
               _showTentangAplikasi(context);
@@ -432,12 +445,23 @@ class _ProfilScreenState extends State<ProfilScreen> {
           _buildDivider(),
           _buildRowItem(
             context: context,
-            icon: Icons.security_rounded,
-            iconColor: AppColors.onSurfaceVariant,
-            iconBgColor: AppColors.surfaceContainer,
+            icon: Icons.privacy_tip_outlined,
+            iconColor: AppColors.primary,
+            iconBgColor: AppColors.surfaceContainerLow,
             title: 'Kebijakan Privasi',
             onTap: () {
               _showKebijakanPrivasi(context);
+            },
+          ),
+          _buildDivider(),
+          _buildRowItem(
+            context: context,
+            icon: Icons.cleaning_services_outlined,
+            iconColor: AppColors.tertiary,
+            iconBgColor: AppColors.tertiary.withValues(alpha: 0.1),
+            title: 'Bersihkan Data & Sinkron Ulang',
+            onTap: () {
+              _showBersihkanDataDialog(context);
             },
           ),
         ],
@@ -457,15 +481,19 @@ class _ProfilScreenState extends State<ProfilScreen> {
     return _SpringButton(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
         child: Row(
           children: [
             Container(
-              width: 40.0,
-              height: 40.0,
+              width: 38.0,
+              height: 38.0,
               decoration: BoxDecoration(
                 color: iconBgColor,
                 borderRadius: BorderRadius.circular(12.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 0.8,
+                ),
               ),
               child: Icon(
                 icon,
@@ -473,14 +501,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
                 size: 20.0,
               ),
             ),
-            const SizedBox(width: 16.0),
+            const SizedBox(width: 14.0),
             Expanded(
               child: Text(
                 title,
                 style: GoogleFonts.plusJakartaSans(
-                  fontSize: 16.0,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.onSurface,
+                  color: AppColors.textPrimary,
                 ),
               ),
             ),
@@ -506,24 +534,11 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Logout Button
+  // Logout Button with Confirmation Dialog Trigger
   Widget _buildLogoutButton(BuildContext context) {
     return _SpringButton(
-      onTap: () async {
-        try {
-          await Supabase.instance.client.auth.signOut();
-          if (context.mounted) {
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (context) => const LoginScreen()),
-              (route) => false,
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            _showToast(context, 'Gagal keluar: $e');
-          }
-        }
+      onTap: () {
+        _showLogoutConfirmationDialog(context);
       },
       child: Container(
         width: double.infinity,
@@ -532,14 +547,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
           color: AppColors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(16.0),
           border: Border.all(
-            color: AppColors.borderSubtle.withValues(alpha: 0.5),
+            color: AppColors.error.withValues(alpha: 0.25),
             width: 1.0,
           ),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
-              color: Color.fromRGBO(0, 0, 0, 0.04),
-              blurRadius: 24,
-              offset: Offset(0, 4),
+              color: Colors.black.withValues(alpha: 0.02),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
@@ -553,10 +568,10 @@ class _ProfilScreenState extends State<ProfilScreen> {
             ),
             const SizedBox(width: 8.0),
             Text(
-              'Keluar',
+              'Keluar dari Akun',
               style: GoogleFonts.plusJakartaSans(
-                fontSize: 16.0,
-                fontWeight: FontWeight.w600,
+                fontSize: 15.0,
+                fontWeight: FontWeight.w700,
                 color: AppColors.error,
               ),
             ),
@@ -566,111 +581,82 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Version Info Text
-  Widget _buildVersionText() {
-    return Center(
-      child: Opacity(
-        opacity: 0.6,
-        child: Text(
-          'Versi Aplikasi 1.1.1',
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 12.0,
-            color: AppColors.textSecondary,
-            fontWeight: FontWeight.w400,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Simple feedback utility
-  void _showToast(BuildContext context, String message) {
-    AppToast.show(
-      context: context,
-      message: message,
-      type: AppToastType.info,
-    );
-  }
-
-  // Beautiful Blurred Dialog for Informasi Pribadi
-  void _showInformasiPribadi(BuildContext context) {
+  // Logout Confirmation Dialog
+  void _showLogoutConfirmationDialog(BuildContext context) {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (context) {
+      builder: (BuildContext dialogContext) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
             elevation: 0,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Informasi Pribadi',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.logout_rounded,
+                      color: AppColors.error,
+                      size: 28,
+                    ),
                   ),
-                  const SizedBox(height: 16.0),
-                  _buildInfoRow('Nama Lengkap', _name.isNotEmpty ? _name : '-'),
-                  _buildInfoDivider(),
-                  _buildInfoRow(
-                      'Jenis Kelamin', _gender.isNotEmpty ? _gender : '-'),
-                  _buildInfoDivider(),
-                  _buildInfoRow(
-                      'Tanggal Lahir',
-                      _birthDate.isNotEmpty
-                          ? _formatBirthDate(_birthDate)
-                          : '-'),
-                  _buildInfoDivider(),
-                  _buildInfoRow(
-                      'Alamat Lengkap', _address.isNotEmpty ? _address : '-'),
+                  const SizedBox(height: 18.0),
+                  Text(
+                    'Konfirmasi Keluar',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 8.0),
+                  Text(
+                    'Apakah Anda yakin ingin keluar dari akun kader? Anda harus masuk kembali untuk mengelola data skrining warga.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                      height: 1.5,
+                    ),
+                  ),
                   const SizedBox(height: 24.0),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton(
                           style: OutlinedButton.styleFrom(
-                            side:
-                                const BorderSide(color: AppColors.borderSubtle),
+                            side: const BorderSide(color: AppColors.borderSubtle),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.0),
+                              borderRadius: BorderRadius.circular(14.0),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 14.0),
                           ),
-                          onPressed: () => Navigator.pop(context),
+                          onPressed: () => Navigator.pop(dialogContext),
                           child: Text(
-                            'Tutup',
+                            'Batal',
                             style: GoogleFonts.plusJakartaSans(
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
                               color: AppColors.textSecondary,
+                              fontSize: 14,
                             ),
                           ),
                         ),
@@ -679,22 +665,47 @@ class _ProfilScreenState extends State<ProfilScreen> {
                       Expanded(
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
+                            backgroundColor: AppColors.error,
                             foregroundColor: Colors.white,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.0),
+                              borderRadius: BorderRadius.circular(14.0),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 14.0),
                           ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _showEditInformasiPribadi(context);
+                          onPressed: () async {
+                            Navigator.pop(dialogContext); // Close dialog
+                            try {
+                              await KaderAuthService.clearLocalSession();
+                              await AppDatabase.instance.clearAllData();
+                              try {
+                                await GoogleSignIn.instance.signOut();
+                              } catch (_) {}
+                              await Supabase.instance.client.auth.signOut();
+                              if (context.mounted) {
+                                Navigator.pushAndRemoveUntil(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (context) => const WelcomeScreen()),
+                                  (route) => false,
+                                );
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                AppToast.show(
+                                  context: context,
+                                  message: 'Gagal keluar: $e',
+                                  type: AppToastType.error,
+                                );
+                              }
+                            }
                           },
+
                           child: Text(
-                            'Ubah Data',
+                            'Ya, Keluar',
                             style: GoogleFonts.plusJakartaSans(
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
                             ),
                           ),
                         ),
@@ -710,7 +721,279 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Beautiful Blurred Dialog for Edit Informasi Pribadi
+  // Dialog Bersihkan Data Pengujian & Sinkron Ulang
+  void _showBersihkanDataDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24.0),
+            child: Container(
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.cleaning_services_outlined,
+                      color: AppColors.primary,
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(height: 18.0),
+                  Text(
+                    'Bersihkan Data Uji Coba?',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 8.0),
+                  Text(
+                    'Tindakan ini akan mengosongkan seluruh data lokal di perangkat dan memperbarui data dari server Posyandu Sakura RW 06.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 24.0),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: AppColors.borderSubtle),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16.0),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14.0),
+                          ),
+                          onPressed: () => Navigator.pop(dialogContext),
+                          child: Text(
+                            'Batal',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12.0),
+                      Expanded(
+                        child: SizedBox(
+                          height: 52,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              shadowColor: Colors.transparent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16.0),
+                              ),
+                            ),
+                            onPressed: () async {
+                              Navigator.pop(dialogContext);
+                              try {
+                                await AppDatabase.instance.clearAllData();
+                                await SyncService.instance.syncAll();
+                                if (context.mounted) {
+                                  AppToast.show(
+                                    context: context,
+                                    message: 'Data berhasil dibersihkan dan disinkronkan',
+                                    type: AppToastType.success,
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  AppToast.show(
+                                    context: context,
+                                    message: 'Gagal membersihkan data: $e',
+                                    type: AppToastType.error,
+                                  );
+                                }
+                              }
+                            },
+                            child: Text(
+                              'Ya, Bersihkan',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Version Info Text
+  Widget _buildVersionText() {
+    return Center(
+      child: Column(
+        children: [
+          Text(
+            'Info Lansia • Versi 2.0.0',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 12.5,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2.0),
+          Text(
+            'Khusus Kader & Tenaga Kesehatan Posyandu Sakura RW 06',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11.0,
+              color: AppColors.outline,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Dialog for Informasi Pribadi (No redundant (X) button, only bottom buttons)
+  void _showInformasiPribadi(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
+            elevation: 0,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 400),
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Informasi Pribadi Kader',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 18.0),
+                  _buildInfoRow('Nama Lengkap', _name.isNotEmpty ? _name : '-'),
+                  _buildInfoDivider(),
+                  _buildInfoRow(
+                      'Jenis Kelamin', _gender.isNotEmpty ? _gender : '-'),
+                  _buildInfoDivider(),
+                  _buildInfoRow(
+                      'Tanggal Lahir',
+                      _birthDate.isNotEmpty
+                          ? _formatBirthDate(_birthDate)
+                          : '-'),
+                  _buildInfoDivider(),
+                  _buildInfoRow(
+                      'Alamat Domisili', _address.isNotEmpty ? _address : '-'),
+                  const SizedBox(height: 24.0),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            side:
+                                const BorderSide(color: AppColors.borderSubtle),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14.0),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14.0),
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(
+                            'Tutup',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12.0),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14.0),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14.0),
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _showEditInformasiPribadi(context);
+                          },
+                          child: Text(
+                            'Ubah Data',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Dialog for Edit Informasi Pribadi (Redesigned: Clean, Minimalist, Squircle)
   void _showEditInformasiPribadi(BuildContext context) {
     String tempName = _name;
     String tempGender = _gender.isNotEmpty ? _gender : 'Perempuan';
@@ -733,12 +1016,13 @@ class _ProfilScreenState extends State<ProfilScreen> {
           builder: (context, setStateBuilder) {
             Future<void> selectDate() async {
               DateTime initialDate = tempBirthDate.isNotEmpty
-                  ? DateTime.tryParse(tempBirthDate) ?? DateTime(1990)
-                  : DateTime(1990);
+                  ? DateTime.tryParse(tempBirthDate) ?? DateTime(1985)
+                  : DateTime(1985);
+
               final DateTime? picked = await showDatePicker(
                 context: context,
                 initialDate: initialDate,
-                firstDate: DateTime(1900),
+                firstDate: DateTime(1940),
                 lastDate: DateTime.now(),
                 builder: (context, child) {
                   return Theme(
@@ -746,11 +1030,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
                       colorScheme: const ColorScheme.light(
                         primary: AppColors.primary,
                         onPrimary: Colors.white,
-                        onSurface: AppColors.onSurface,
+                        onSurface: AppColors.textPrimary,
                       ),
                       textButtonTheme: TextButtonThemeData(
                         style: TextButton.styleFrom(
                           foregroundColor: AppColors.primary,
+                          textStyle: GoogleFonts.plusJakartaSans(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -758,32 +1045,33 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   );
                 },
               );
+
               if (picked != null) {
                 setStateBuilder(() {
-                  tempBirthDate = picked.toIso8601String().split('T').first;
+                  tempBirthDate =
+                      "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
                   dateController.text = _formatDisplayDate(picked);
                 });
               }
             }
 
             return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+              filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
               child: Dialog(
                 backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 20.0, vertical: 24.0),
                 elevation: 0,
                 child: Container(
-                  constraints: const BoxConstraints(maxWidth: 400),
+                  constraints: const BoxConstraints(maxWidth: 420),
                   padding: const EdgeInsets.all(24.0),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceContainerLowest,
-                    borderRadius: BorderRadius.circular(28.0),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 24,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
+                    borderRadius: BorderRadius.circular(24.0),
+                    border: Border.all(
+                      color: AppColors.borderSubtle,
+                      width: 1.0,
+                    ),
                   ),
                   child: SingleChildScrollView(
                     child: Form(
@@ -792,47 +1080,80 @@ class _ProfilScreenState extends State<ProfilScreen> {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          // Header: Icon Badge + Title + Subtitle
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                'Ubah Informasi Pribadi',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(12.0),
+                                ),
+                                child: const Icon(
+                                  Icons.badge_outlined,
                                   color: AppColors.primary,
+                                  size: 22.0,
                                 ),
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.close_rounded),
-                                onPressed: () {
-                                  Navigator.pop(context);
-                                  _showInformasiPribadi(context);
-                                },
+                              const SizedBox(width: 14.0),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Ubah Data Kader',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 17.5,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textPrimary,
+                                        letterSpacing: -0.3,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2.0),
+                                    Text(
+                                      'Perbarui identitas profil kader',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12.0,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 16.0),
+                          const SizedBox(height: 18.0),
+                          const Divider(height: 1.0, color: AppColors.borderSubtle),
+                          const SizedBox(height: 18.0),
 
                           // Nama Lengkap
                           Text(
-                            'Nama Lengkap',
+                            'NAMA LENGKAP',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.onSurface,
+                              fontSize: 11.0,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                              letterSpacing: 0.6,
                             ),
                           ),
                           const SizedBox(height: 6.0),
                           TextFormField(
                             controller: nameController,
+                            textCapitalization: TextCapitalization.words,
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.onSurface,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
                             ),
                             decoration: _buildInputDecoration(
-                                hint: 'Masukkan nama lengkap'),
+                              hint: 'Masukkan nama lengkap',
+                              prefixIcon: const Icon(
+                                Icons.person_outline_rounded,
+                                color: AppColors.outline,
+                                size: 20.0,
+                              ),
+                            ),
                             validator: (value) {
                               if (value == null || value.trim().isEmpty) {
                                 return 'Nama lengkap wajib diisi';
@@ -842,112 +1163,132 @@ class _ProfilScreenState extends State<ProfilScreen> {
                           ),
                           const SizedBox(height: 16.0),
 
-                          // Jenis Kelamin
+                          // Jenis Kelamin Segmented Selector
                           Text(
-                            'Jenis Kelamin',
+                            'JENIS KELAMIN',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.onSurface,
+                              fontSize: 11.0,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                              letterSpacing: 0.6,
                             ),
                           ),
                           const SizedBox(height: 6.0),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () {
-                                    setStateBuilder(() {
-                                      tempGender = 'Perempuan';
-                                    });
-                                  },
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    height: 48,
-                                    decoration: BoxDecoration(
-                                      color: tempGender == 'Perempuan'
-                                          ? AppColors.primary
-                                              .withValues(alpha: 0.05)
-                                          : AppColors.surface,
-                                      borderRadius: BorderRadius.circular(12.0),
-                                      border: Border.all(
-                                        color: tempGender == 'Perempuan'
+                          Container(
+                            height: 48.0,
+                            padding: const EdgeInsets.all(4.0),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceContainerLow,
+                              borderRadius: BorderRadius.circular(14.0),
+                              border: Border.all(
+                                color: AppColors.borderSubtle,
+                                width: 1.0,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      setStateBuilder(() {
+                                        tempGender = 'Laki-laki';
+                                      });
+                                    },
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: tempGender == 'Laki-laki'
                                             ? AppColors.primary
-                                            : AppColors.borderSubtle,
-                                        width: tempGender == 'Perempuan'
-                                            ? 2.0
-                                            : 1.0,
+                                            : Colors.transparent,
+                                        borderRadius:
+                                            BorderRadius.circular(10.0),
                                       ),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      'Perempuan',
-                                      style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 14.0,
-                                        fontWeight: tempGender == 'Perempuan'
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: tempGender == 'Perempuan'
-                                            ? AppColors.primary
-                                            : AppColors.textSecondary,
+                                      alignment: Alignment.center,
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.male_rounded,
+                                            size: 16.0,
+                                            color: tempGender == 'Laki-laki'
+                                                ? Colors.white
+                                                : AppColors.textSecondary,
+                                          ),
+                                          const SizedBox(width: 6.0),
+                                          Text(
+                                            'Laki-laki',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontSize: 13.0,
+                                              fontWeight: tempGender == 'Laki-laki'
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w600,
+                                              color: tempGender == 'Laki-laki'
+                                                  ? Colors.white
+                                                  : AppColors.textSecondary,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 12.0),
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () {
-                                    setStateBuilder(() {
-                                      tempGender = 'Laki-laki';
-                                    });
-                                  },
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    height: 48,
-                                    decoration: BoxDecoration(
-                                      color: tempGender == 'Laki-laki'
-                                          ? AppColors.primary
-                                              .withValues(alpha: 0.05)
-                                          : AppColors.surface,
-                                      borderRadius: BorderRadius.circular(12.0),
-                                      border: Border.all(
-                                        color: tempGender == 'Laki-laki'
+                                const SizedBox(width: 4.0),
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      setStateBuilder(() {
+                                        tempGender = 'Perempuan';
+                                      });
+                                    },
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: tempGender == 'Perempuan'
                                             ? AppColors.primary
-                                            : AppColors.borderSubtle,
-                                        width: tempGender == 'Laki-laki'
-                                            ? 2.0
-                                            : 1.0,
+                                            : Colors.transparent,
+                                        borderRadius:
+                                            BorderRadius.circular(10.0),
                                       ),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      'Laki-laki',
-                                      style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 14.0,
-                                        fontWeight: tempGender == 'Laki-laki'
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: tempGender == 'Laki-laki'
-                                            ? AppColors.primary
-                                            : AppColors.textSecondary,
+                                      alignment: Alignment.center,
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.female_rounded,
+                                            size: 16.0,
+                                            color: tempGender == 'Perempuan'
+                                                ? Colors.white
+                                                : AppColors.textSecondary,
+                                          ),
+                                          const SizedBox(width: 6.0),
+                                          Text(
+                                            'Perempuan',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontSize: 13.0,
+                                              fontWeight: tempGender == 'Perempuan'
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w600,
+                                              color: tempGender == 'Perempuan'
+                                                  ? Colors.white
+                                                  : AppColors.textSecondary,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                           const SizedBox(height: 16.0),
 
                           // Tanggal Lahir
                           Text(
-                            'Tanggal Lahir',
+                            'TANGGAL LAHIR',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.onSurface,
+                              fontSize: 11.0,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                              letterSpacing: 0.6,
                             ),
                           ),
                           const SizedBox(height: 6.0),
@@ -958,15 +1299,19 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                 controller: dateController,
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
                                 ),
-                                decoration:
-                                    _buildInputDecoration(hint: 'dd/mm/yyyy')
-                                        .copyWith(
-                                  suffixIcon: const Icon(
-                                    Icons.calendar_today_rounded,
+                                decoration: _buildInputDecoration(
+                                  hint: 'dd/mm/yyyy',
+                                  prefixIcon: const Icon(
+                                    Icons.cake_outlined,
                                     color: AppColors.outline,
+                                    size: 20.0,
+                                  ),
+                                  suffixIcon: const Icon(
+                                    Icons.calendar_month_rounded,
+                                    color: AppColors.primary,
                                     size: 20.0,
                                   ),
                                 ),
@@ -983,11 +1328,12 @@ class _ProfilScreenState extends State<ProfilScreen> {
 
                           // Alamat Lengkap
                           Text(
-                            'Alamat Lengkap',
+                            'ALAMAT DOMISILI',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.onSurface,
+                              fontSize: 11.0,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                              letterSpacing: 0.6,
                             ),
                           ),
                           const SizedBox(height: 6.0),
@@ -997,20 +1343,29 @@ class _ProfilScreenState extends State<ProfilScreen> {
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.onSurface,
+                              color: AppColors.textPrimary,
                             ),
                             decoration: _buildInputDecoration(
-                                hint: 'Masukkan alamat lengkap'),
+                              hint: 'Masukkan alamat lengkap domisili',
+                              prefixIcon: const Padding(
+                                padding: EdgeInsets.only(bottom: 36.0),
+                                child: Icon(
+                                  Icons.location_on_outlined,
+                                  color: AppColors.outline,
+                                  size: 20.0,
+                                ),
+                              ),
+                            ),
                             validator: (value) {
                               if (value == null || value.trim().isEmpty) {
-                                return 'Alamat lengkap wajib diisi';
+                                return 'Alamat domisili wajib diisi';
                               }
                               return null;
                             },
                           ),
                           const SizedBox(height: 24.0),
 
-                          // Actions
+                          // Actions: Batal and Simpan (Squircle styled)
                           Row(
                             children: [
                               Expanded(
@@ -1019,7 +1374,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                     side: const BorderSide(
                                         color: AppColors.borderSubtle),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12.0),
+                                      borderRadius: BorderRadius.circular(14.0),
                                     ),
                                     padding: const EdgeInsets.symmetric(
                                         vertical: 14.0),
@@ -1031,7 +1386,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                   child: Text(
                                     'Batal',
                                     style: GoogleFonts.plusJakartaSans(
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w700,
                                       color: AppColors.textSecondary,
                                     ),
                                   ),
@@ -1045,7 +1400,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                     foregroundColor: Colors.white,
                                     elevation: 0,
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12.0),
+                                      borderRadius: BorderRadius.circular(14.0),
                                     ),
                                     padding: const EdgeInsets.symmetric(
                                         vertical: 14.0),
@@ -1081,15 +1436,23 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                               });
 
                                               if (context.mounted) {
-                                                _showToast(context,
-                                                    'Profil berhasil diperbarui');
+                                                AppToast.show(
+                                                  context: context,
+                                                  message:
+                                                      'Profil berhasil diperbarui',
+                                                  type: AppToastType.success,
+                                                );
                                                 Navigator.pop(context);
                                                 _showInformasiPribadi(context);
                                               }
                                             } catch (e) {
                                               if (context.mounted) {
-                                                _showToast(context,
-                                                    'Gagal memperbarui profil: $e');
+                                                AppToast.show(
+                                                  context: context,
+                                                  message:
+                                                      'Gagal memperbarui profil: $e',
+                                                  type: AppToastType.error,
+                                                );
                                               }
                                             } finally {
                                               setStateBuilder(() {
@@ -1112,7 +1475,8 @@ class _ProfilScreenState extends State<ProfilScreen> {
                                       : Text(
                                           'Simpan',
                                           style: GoogleFonts.plusJakartaSans(
-                                            fontWeight: FontWeight.bold,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 14,
                                           ),
                                         ),
                                 ),
@@ -1154,8 +1518,8 @@ class _ProfilScreenState extends State<ProfilScreen> {
               value,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 14.0,
-                color: AppColors.onSurface,
-                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -1172,92 +1536,67 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Beautiful Blurred Dialog for Pusat Bantuan
+  // Dialog for Pusat Bantuan (No redundant (X), only bottom "Tutup")
   void _showPusatBantuan(BuildContext context) {
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (context) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
             elevation: 0,
             child: Container(
               constraints: const BoxConstraints(maxWidth: 400),
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Pusat Bantuan',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16.0),
                   Text(
-                    'Butuh bantuan atau memiliki pertanyaan mengenai layanan Posyandu Sakura? Silakan hubungi kami melalui saluran berikut:',
+                    'Pusat Bantuan',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 12.0),
+                  Text(
+                    'Butuh bantuan atau memiliki pertanyaan seputar operasional aplikasi Info Lansia? Silakan hubungi saluran berikut:',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13.0,
                       color: AppColors.textSecondary,
-                      height: 1.4,
+                      height: 1.45,
                     ),
                   ),
-                  const SizedBox(height: 20.0),
-                  _buildHelpContactItem(
-                    context: context,
-                    icon: Icons.chat_bubble_outline_rounded,
-                    title: 'Hubungi via WhatsApp',
-                    subtitle: '+62 812-3456-7890',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showToast(context, 'Membuka WhatsApp Bantuan...');
-                    },
-                  ),
-                  const SizedBox(height: 12.0),
+                  const SizedBox(height: 18.0),
                   _buildHelpContactItem(
                     context: context,
                     icon: Icons.email_outlined,
-                    title: 'Kirim Email',
-                    subtitle: 'bantuan@posyandusakura.id',
+                    title: 'Email Dukungan Teknis',
+                    subtitle: 'muhammadumamsyafiul@gmail.com',
                     onTap: () {
-                      Navigator.pop(context);
-                      _showToast(context, 'Membuka Email Client...');
-                    },
-                  ),
-                  const SizedBox(height: 12.0),
-                  _buildHelpContactItem(
-                    context: context,
-                    icon: Icons.help_outline_rounded,
-                    title: 'Panduan Penggunaan',
-                    subtitle: 'Baca petunjuk aplikasi',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showToast(context, 'Membuka Panduan Aplikasi...');
+                      Clipboard.setData(
+                        const ClipboardData(
+                            text: 'muhammadumamsyafiul@gmail.com'),
+                      );
+                      AppToast.show(
+                        context: context,
+                        message: 'Alamat email disalin ke clipboard',
+                        type: AppToastType.info,
+                      );
                     },
                   ),
                   const SizedBox(height: 24.0),
@@ -1267,7 +1606,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12.0),
+                        borderRadius: BorderRadius.circular(16.0),
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 14.0),
                     ),
@@ -1275,7 +1614,8 @@ class _ProfilScreenState extends State<ProfilScreen> {
                     child: Text(
                       'Tutup',
                       style: GoogleFonts.plusJakartaSans(
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -1299,7 +1639,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16.0),
       child: Container(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(14.0),
         decoration: BoxDecoration(
           color: AppColors.surfaceContainerLow,
           borderRadius: BorderRadius.circular(16.0),
@@ -1313,7 +1653,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
             Container(
               padding: const EdgeInsets.all(8.0),
               decoration: BoxDecoration(
-                color: AppColors.secondaryContainer,
+                color: AppColors.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10.0),
               ),
               child: Icon(
@@ -1330,9 +1670,9 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   Text(
                     title,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 14.0,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.onSurface,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2.0),
@@ -1357,108 +1697,143 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Beautiful Blurred Dialog for Tentang Aplikasi
+  // Dialog for Tentang Aplikasi (Updated icon, version 2.0.0, and branding)
   void _showTentangAplikasi(BuildContext context) {
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (context) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
             elevation: 0,
             child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
+              constraints: const BoxConstraints(maxWidth: 420, maxHeight: 620),
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.local_florist_rounded,
-                      color: AppColors.primary,
-                      size: 48.0,
-                    ),
-                  ),
-                  const SizedBox(height: 16.0),
-                  Text(
-                    'Posyandu Sakura',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 4.0),
-                  Text(
-                    'Versi 1.1.1',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 16.0),
-                  Text(
-                    'Aplikasi Posyandu Sakura dirancang untuk memantau kesehatan lansia secara berkala, mempermudah petugas posyandu dalam melakukan skrining bulanan, serta menyediakan visualisasi tren kesehatan secara real-time untuk mendukung kesejahteraan lansia di lingkungan RW 06.',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
-                      height: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 24.0),
-                  const Divider(height: 1.0, color: AppColors.borderSubtle),
-                  const SizedBox(height: 16.0),
-                  Text(
-                    '© 2026 Posyandu Sakura Team. Hak Cipta Dilindungi.',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
-                      color: AppColors.outline,
-                    ),
-                  ),
-                  const SizedBox(height: 24.0),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12.0),
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // App Icon: Healthcare worker and elderly woman illustration
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(20.0),
+                        border: Border.all(
+                          color: AppColors.borderSubtle,
+                          width: 1.0,
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 14.0),
                       ),
-                      onPressed: () => Navigator.pop(context),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(19.0),
+                        child: Image.asset(
+                          'assets/images/Healthcare_worker_and_elderly_wo…_2K_202609080031.webp',
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Container(
+                            color: AppColors.primary.withValues(alpha: 0.1),
+                            alignment: Alignment.center,
+                            child: const Icon(
+                              Icons.health_and_safety_rounded,
+                              color: AppColors.primary,
+                              size: 40.0,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14.0),
+                    Text(
+                      'Info Lansia',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4.0),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10.0, vertical: 2.0),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6.0),
+                      ),
                       child: Text(
-                        'Tutup',
+                        'Versi 2.0.0',
                         style: GoogleFonts.plusJakartaSans(
-                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12.0),
+                    Text(
+                      'Aplikasi Info Lansia dirancang khusus untuk Kader dan Tenaga Kesehatan Posyandu Sakura RW 06 guna memantau kesehatan warga lansia secara berkala, mempermudah pencatatan skrining bulanan, serta menyajikan visualisasi data kesehatan secara akurat.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 16.0),
+
+                    // Medical Guidelines & Disclaimer
+                    const MedicalDisclaimerCard(
+                      showSourcesList: true,
+                      margin: EdgeInsets.zero,
+                    ),
+
+                    const SizedBox(height: 18.0),
+                    const Divider(height: 1.0, color: AppColors.borderSubtle),
+                    const SizedBox(height: 12.0),
+                    Text(
+                      '© 2026 Posyandu Sakura RW 06. Hak Cipta Dilindungi.',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        color: AppColors.outline,
+                      ),
+                    ),
+                    const SizedBox(height: 16.0),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16.0),
+                          ),
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                        child: Text(
+                          'Tutup',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1467,55 +1842,45 @@ class _ProfilScreenState extends State<ProfilScreen> {
     );
   }
 
-  // Beautiful Blurred Dialog for Kebijakan Privasi
+  // Dialog for Kebijakan Privasi (Polished wording, no redundant (X), bottom "Tutup")
   void _showKebijakanPrivasi(BuildContext context) {
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (context) {
         return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+          filter: ImageFilter.blur(sigmaX: 4.0, sigmaY: 4.0),
           child: Dialog(
             backgroundColor: Colors.transparent,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
             elevation: 0,
             child: Container(
               constraints: const BoxConstraints(maxWidth: 400),
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(28.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(
+                  color: AppColors.borderSubtle,
+                  width: 1.0,
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Kebijakan Privasi',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
+                  Text(
+                    'Kebijakan Privasi',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                  const SizedBox(height: 12.0),
+                  const SizedBox(height: 14.0),
                   ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 250),
+                    constraints: const BoxConstraints(maxHeight: 280),
                     child: Scrollbar(
                       thumbVisibility: true,
                       child: SingleChildScrollView(
@@ -1523,43 +1888,44 @@ class _ProfilScreenState extends State<ProfilScreen> {
                         child: Padding(
                           padding: const EdgeInsets.only(right: 12.0),
                           child: Text(
-                            'Selamat datang di Aplikasi Posyandu Sakura.\n\n'
-                            'Kami sangat berkomitmen untuk melindungi data pribadi dan medis Anda. Kebijakan ini menjelaskan bagaimana data Anda dikelola:\n\n'
+                            'Selamat datang di aplikasi Info Lansia (Layanan Lansia RW 06 Posyandu Sakura).\n\n'
+                            'Kami berkomitmen penuh untuk menjaga keamanan data pribadi dan informasi medis warga lansia. Kebijakan ini menjelaskan bagaimana data dikelola:\n\n'
                             '1. Pengumpulan Data\n'
-                            'Kami mengumpulkan informasi pribadi seperti Nama, Alamat, serta hasil pemeriksaan fisik bulanan Anda (Tekanan Darah, Gula Darah, Kolesterol, dll).\n\n'
+                            'Kami mencatat data identitas warga lansia (Nama, Jenis Kelamin, Tanggal Lahir, Alamat) serta hasil pemeriksaan kesehatan bulanan (Tekanan Darah dan Gula Darah Sewaktu).\n\n'
                             '2. Penggunaan Data\n'
-                            'Data medis Anda digunakan murni untuk mencatat rekam medis pelayanan Posyandu Sakura, memantau tren perkembangan kesehatan lansia secara individu, dan menyajikan laporan kesehatan kumulatif tingkat RT/RW.\n\n'
-                            '3. Keamanan Data\n'
-                            'Data dienkripsi secara aman di cloud database dan hanya dapat diakses oleh bidan atau kader posyandu yang berwenang di RW 06.\n\n'
-                            '4. Persetujuan\n'
-                            'Dengan menggunakan aplikasi ini, Anda setuju bahwa data pemeriksaan posyandu Anda direkam secara digital untuk kepentingan pemantauan medis.\n\n'
-                            'Jika Anda memiliki pertanyaan mengenai data pribadi Anda, hubungi tim bantuan posyandu kami.',
+                            'Data digunakan secara khusus untuk pencatatan rekam medis pelayanan Posyandu Sakura RW 06, pemantauan tren kondisi kesehatan lansia secara berkelanjutan, dan memfasilitasi rujukan medis jika terdeteksi faktor risiko tinggi.\n\n'
+                            '3. Hak Akses & Keamanan\n'
+                            'Akses terhadap data dibatasi secara ketat khusus untuk kader posyandu dan tenaga kesehatan wilayah RW 06 yang telah terotentikasi. Seluruh data disimpan secara aman pada infrastruktur cloud database terenkripsi.\n\n'
+                            '4. Kerahasiaan Medis\n'
+                            'Informasi kesehatan warga bersifat rahasia dan tidak akan diperjualbelikan maupun dibagikan kepada pihak luar di luar kebutuhan pelayanan kesehatan masyarakat.\n\n'
+                            'Jika terdapat pertanyaan mengenai privasi atau pengelolaan data, silakan hubungi tim kader Posyandu Sakura RW 06.',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 13,
+                              fontSize: 12.5,
                               color: AppColors.textSecondary,
-                              height: 1.5,
+                              height: 1.55,
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24.0),
+                  const SizedBox(height: 20.0),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12.0),
+                        borderRadius: BorderRadius.circular(14.0),
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 14.0),
                     ),
                     onPressed: () => Navigator.pop(context),
                     child: Text(
-                      'Saya Mengerti',
+                      'Tutup',
                       style: GoogleFonts.plusJakartaSans(
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -1573,7 +1939,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
   }
 }
 
-// Custom spring button for crisp Apple/iOS click feel
+// Spring Button for tactile click feel
 class _SpringButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
